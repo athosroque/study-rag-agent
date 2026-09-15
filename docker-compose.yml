@@ -1,0 +1,107 @@
+services:
+  study-rag-db:
+    image: pgvector/pgvector:pg16
+    container_name: study-rag-db
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: study_rag
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+    ports:
+      - "5434:5432"
+    volumes:
+      - study_rag_pgdata:/var/lib/postgresql/data
+    networks:
+      - homelab_default
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres -d study_rag"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  study-rag-api:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: study-rag-api
+    restart: unless-stopped
+    ports:
+      - "8090:8000"
+    volumes:
+      - ./src:/app/src
+      - ./tests:/app/tests
+      - ./scripts:/app/scripts
+    environment:
+      POSTGRES_HOST: study-rag-db
+      POSTGRES_PORT: 5432
+      POSTGRES_DB: study_rag
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+      LITELLM_BASE_URL: http://litellm:4000/v1
+      LITELLM_API_KEY: sk-master-5184388f4d1f9ae9299217ce84dccaf0d3bf2c78c5aa0a2db831ad308e82a721
+      MODEL_FAST: fast
+      MODEL_MID: mid
+      MODEL_STRONG: strong
+      LANGFUSE_PUBLIC_KEY: pk-lf-944c3458-c3e3-40fb-b7c0-e15844a2c848
+      LANGFUSE_SECRET_KEY: sk-lf-2d440ba0-ab8f-464f-b739-3994753b057b
+      LANGFUSE_HOST: https://cloud.langfuse.com
+      LANGCHAIN_TRACING_V2: ${LANGCHAIN_TRACING_V2:-false}
+      LANGCHAIN_API_KEY: ${LANGCHAIN_API_KEY:-}
+      LANGCHAIN_PROJECT: ${LANGCHAIN_PROJECT:-study-rag-agent}
+      LANGCHAIN_ENDPOINT: ${LANGCHAIN_ENDPOINT:-https://api.smith.langchain.com}
+      EMBEDDING_PROVIDER: fastembed
+      EMBEDDING_MODEL: BAAI/bge-small-en-v1.5
+      EMBEDDING_DIM: 384
+      MIN_SIMILARITY_THRESHOLD: 0.50
+    depends_on:
+      study-rag-db:
+        condition: service_healthy
+    networks:
+      - homelab_default
+
+  study-rag-pgadmin:
+    image: dpage/pgadmin4:latest
+    container_name: study-rag-pgadmin
+    restart: unless-stopped
+    ports:
+      - "5050:80"
+    environment:
+      PGADMIN_DEFAULT_EMAIL: admin@admin.com
+      PGADMIN_DEFAULT_PASSWORD: admin
+      PGADMIN_CONFIG_SERVER_MODE: 'False'
+    volumes:
+      - ./servers.json:/pgadmin4/servers.json:ro
+      - study_rag_pgadmin_data:/var/lib/pgadmin
+    depends_on:
+      study-rag-db:
+        condition: service_healthy
+    networks:
+      - homelab_default
+
+  study-rag-bot:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: study-rag-bot
+    restart: unless-stopped
+    volumes:
+      - ./src:/app/src
+      - ./scripts:/app/scripts
+    env_file:
+      - .env
+    environment:
+      API_BASE_URL: http://study-rag-api:8000/api/v1
+    command: python /app/src/bot/main.py
+    depends_on:
+      - study-rag-api
+    networks:
+      - homelab_default
+
+networks:
+  homelab_default:
+    external: true
+
+volumes:
+  study_rag_pgdata:
+  study_rag_pgadmin_data:
+

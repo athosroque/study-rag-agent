@@ -1,0 +1,13 @@
+{
+  "Servers": {
+    "1": {
+      "Name": "Study RAG DB",
+      "Group": "Servers",
+      "Host": "study-rag-db",
+      "Port": 5432,
+      "MaintenanceDB": "study_rag",
+      "Username": "postgres",
+      "SSLMode": "prefer"
+    }
+  }
+}
