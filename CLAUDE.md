@@ -19,14 +19,16 @@ Template version: 1.2
 ## 3. Arquitetura
 
 O fluxo LangGraph processa transcrições/conteúdos de aulas e atua como um curador contínuo de base de conhecimento:
-1. `video_search`: Busca e recebe a aula (ou extrai legendas do YouTube / síntese didática LLM Tier Fast).
+1. `video_search`: Busca e recebe a aula (ou extrai legendas do YouTube / síntese didática com LLM `glm-5.3-flash`).
 2. `validate_video`: Deduplica se o vídeo já foi processado no PostgreSQL.
-3. `extraction_agent`: Extrai itens pedagógicos (teoria, sacada, pegadinha, questão) usando LiteLLM tier `fast` (`deepseek-v4-flash`).
+3. `extraction_agent`: Extrai itens pedagógicos (teoria, sacada, pegadinha, questão) usando LiteLLM (`glm-5.3-flash`).
 4. `retrieve_similar_items`: Localiza o Tópico Mestre mais próximo no pgvector (`search_master_topic`, `parent_id IS NULL`) e recupera o histórico completo anterior de subitens e fragmentos.
-5. `reconciliation_agent`: Curador de conhecimento usando LiteLLM tier `mid` (`mimo-v2.5-pro`) com regras estritas:
+5. `reconciliation_agent`: Curador de conhecimento usando LiteLLM (`glm-5.3-flash`) com regras estritas:
    - Tópico Mestre existente: descarta teoria básica repetida (`DESCARTAR`), descarta questões já arquivadas (`DESCARTAR`), e vincula novidades atômicas ao mestre (`ADICIONAR_FRAGMENTO`).
    - Tópico Inédito: cria novo Tópico Mestre (`CRIAR_NOVO`) e vincula os subitens da aula a ele.
 6. `db_writer`: Executa persistência relacional com `parent_id` e array JSONB `fragmentos` com embeddings vetoriais individualizados de 384 dimensões (`bge-small-en-v1.5`), além de gravar a transcrição completa na tabela `videos_processados`.
+7. `cespe_agent`: Formula questões assertivas inéditas no padrão CESPE/Cebraspe (Certo/Errado) focando em pegadinhas (`glm-5.3-flash`).
+8. `revisao_scheduler`: Agenda o ciclo de revisões ativas no motor de repetição espaçada (Curva de Ebbinghaus).
 
 Serving via FastAPI com Server-Sent Events (SSE) e Dashboard Web interativo com cartões hierárquicos e seções didáticas especializadas (Macetes, Pegadinhas e Questões com gabarito retrátil).
 
@@ -75,14 +77,14 @@ open http://localhost:8090
 # Acessar pgAdmin 4 (Interface Web do Banco de Dados)
 open http://localhost:5050
 
-# Executar Hermes Agent (DeepSeek V4 Pro via LiteLLM)
+# Executar Hermes Agent (GLM 5.3 Flash via LiteLLM)
 ./scripts/hermes.sh
 
 # Consulta rápida via Hermes Agent
 ./scripts/hermes.sh chat -q "Sua pergunta aqui"
 
 # Consultar gasto acumulado do Hermes Agent no LiteLLM
-curl -s -H "Authorization: Bearer sk-master-5184388f4d1f9ae9299217ce84dccaf0d3bf2c78c5aa0a2db831ad308e82a721" "http://127.0.0.1:4000/key/info?key=sk-21UOyNaNyaSvwc7bvj5Dxg"
+curl -s -H "Authorization: Bearer sk-master-5184388f4d1f9ae9299217ce84dccaf0d3bf2c78c5aa0a2db831ad308e82a721" "http://127.0.0.1:4000/key/info?key=sk-T-arQ7cEWBQo0H6xNkMCmA"
 ```
 
 

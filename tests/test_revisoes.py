@@ -11,7 +11,8 @@ from src.models import RespostaRevisaoRequest, RespostaRevisaoLoteRequest
 # Escada de intervalos
 # ---------------------------------------------------------------------
 
-def test_intervalos_escada_padrao():
+def test_intervalos_escada_padrao(monkeypatch):
+    monkeypatch.setattr(revisoes.settings, "REVISAO_INTERVALOS_DIAS", "")
     ladder = revisoes.intervalos()
     assert ladder == [1, 7, 30]
     assert ladder == sorted(ladder)

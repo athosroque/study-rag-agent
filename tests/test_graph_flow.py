@@ -11,9 +11,17 @@ from src.graph import (
     clean_transcript,
     chunk_transcript,
     deduplicate_extracted_items,
-    extraction_agent_node
+    extraction_agent_node,
+    cespe_agent_node,
+    revisao_scheduler_node
 )
-from src.models import StudyState, ItemEstudo, ConjuntoItemsExtraidos
+from src.models import (
+    StudyState,
+    ItemEstudo,
+    ConjuntoItemsExtraidos,
+    QuestaoCespe,
+    ConjuntoQuestoesCespe
+)
 
 
 def test_generate_video_slug_normalization():
@@ -283,3 +291,60 @@ def test_extraction_agent_node_chunk_error_resilience_no_raw_fallback():
 
         res = extraction_agent_node(state)
         assert res["extracted_items"] == []
+
+
+def test_cespe_agent_node_success():
+    state: StudyState = {
+        "master_topic_id": 10,
+        "tema_busca": "Atos Administrativos",
+        "materia": "Direito Administrativo",
+        "materia_id": 2,
+        "video_encontrado": {"link": "https://youtube.com/watch?v=aula123"}
+    }
+    with patch("src.graph.db.get_item_by_id") as mock_get_item, \
+         patch("src.graph.get_llm") as mock_get_llm, \
+         patch("src.graph.embedding_manager.embed_query", return_value=[0.1] * 384), \
+         patch("src.graph.db.append_fragment_to_item") as mock_append:
+
+        mock_get_item.return_value = {
+            "id": 10,
+            "topico": "Atos Administrativos",
+            "conteudo": "Conceito e atributos do ato.",
+            "materia_nome": "Direito Administrativo",
+            "materia_id": 2,
+            "fragmentos": [
+                {"categoria": "pegadinha", "conteudo_incremental": "Multa não tem autoexecutoriedade"}
+            ],
+            "filhos": []
+        }
+
+        mock_llm = MagicMock()
+        mock_structured = MagicMock()
+        mock_questao = QuestaoCespe(
+            topico="Atributos",
+            enunciado="A cobrança de multa administrativa independe de ação de execução fiscal por gozar do atributo da autoexecutoriedade.",
+            gabarito="ERRADO",
+            justificativa="A exigibilidade da multa não se confunde com autoexecutoriedade; a cobrança requer execução fiscal.",
+            pegadinha_explicada="A banca confunde exigibilidade com autoexecutoriedade."
+        )
+        mock_structured.invoke.return_value = ConjuntoQuestoesCespe(questoes=[mock_questao])
+        mock_llm.with_structured_output.return_value = mock_structured
+        mock_get_llm.return_value = mock_llm
+
+        res = cespe_agent_node(state)
+        assert len(res["cespe_questions"]) == 1
+        assert res["cespe_questions"][0]["gabarito"] == "ERRADO"
+        assert mock_append.called
+        call_kwargs = mock_append.call_args.kwargs
+        assert call_kwargs["item_id"] == 10
+        assert call_kwargs["categoria"] == "questao"
+        assert "Gabarito" in call_kwargs["detalhes_resposta"]
+
+
+def test_revisao_scheduler_node_success():
+    state: StudyState = {"tema_busca": "Atos"}
+    with patch("src.graph.revisoes.backfill_revisoes") as mock_backfill:
+        mock_backfill.return_value = {"revisoes_criadas": 4, "itens_sem_revisao": 4}
+        res = revisao_scheduler_node(state)
+        assert res["revisoes_agendadas"]["revisoes_criadas"] == 4
+        assert mock_backfill.called

@@ -7,8 +7,9 @@ class Settings(BaseSettings):
     # LiteLLM
     LITELLM_BASE_URL: str = "http://litellm:4000/v1"
     LITELLM_API_KEY: str = "sk-master-5184388f4d1f9ae9299217ce84dccaf0d3bf2c78c5aa0a2db831ad308e82a721"
-    MODEL_FAST: str = "fast"
-    MODEL_MID: str = "mid"
+    DEFAULT_LLM_MODEL: str = "glm-5.3-flash"
+    MODEL_FAST: str = "glm-5.3-flash"
+    MODEL_MID: str = "glm-5.3-flash"
     MODEL_STRONG: str = "strong"
 
     # PostgreSQL + pgvector

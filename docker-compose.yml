@@ -39,8 +39,9 @@ services:
       POSTGRES_PASSWORD: postgres
       LITELLM_BASE_URL: http://litellm:4000/v1
       LITELLM_API_KEY: sk-master-5184388f4d1f9ae9299217ce84dccaf0d3bf2c78c5aa0a2db831ad308e82a721
-      MODEL_FAST: fast
-      MODEL_MID: mid
+      DEFAULT_LLM_MODEL: glm-5.3-flash
+      MODEL_FAST: glm-5.3-flash
+      MODEL_MID: glm-5.3-flash
       MODEL_STRONG: strong
       LANGFUSE_PUBLIC_KEY: pk-lf-944c3458-c3e3-40fb-b7c0-e15844a2c848
       LANGFUSE_SECRET_KEY: sk-lf-2d440ba0-ab8f-464f-b739-3994753b057b

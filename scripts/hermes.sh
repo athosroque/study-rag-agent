@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # scripts/hermes.sh — Runner do Hermes Agent no contexto do study-rag-agent
-# Usa DeepSeek V4 Pro via LiteLLM com chave virtual exclusiva e Langfuse
+# Usa GLM 5.3 Flash via LiteLLM com chave virtual exclusiva e Langfuse
 
 set -e
 
@@ -15,7 +15,7 @@ if [ -f "$PROJECT_DIR/.env" ]; then
 fi
 
 # Chave exclusiva LiteLLM para o Hermes Agent
-export HERMES_LITELLM_KEY="${HERMES_LITELLM_KEY:-sk-21UOyNaNyaSvwc7bvj5Dxg}"
+export HERMES_LITELLM_KEY="${HERMES_LITELLM_KEY:-sk-T-arQ7cEWBQo0H6xNkMCmA}"
 export OPENROUTER_API_KEY="$HERMES_LITELLM_KEY"
 export OPENROUTER_BASE_URL="${LITELLM_HOST_URL:-http://127.0.0.1:4000/v1}"
 

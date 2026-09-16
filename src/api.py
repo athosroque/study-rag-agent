@@ -238,6 +238,7 @@ async def process_video_endpoint(req: ProcessVideoRequest):
 
     try:
         final_state = study_graph.invoke(initial_state, config=config)
+        cespe_questions = final_state.get("cespe_questions", [])
         return {
             "tema_busca": final_state.get("tema_busca"),
             "materia": final_state.get("materia"),
@@ -248,7 +249,10 @@ async def process_video_endpoint(req: ProcessVideoRequest):
             "relevant_existing_items_count": len(final_state.get("relevant_existing_items", [])),
             "reconciliation_decisions": final_state.get("reconciliation_decisions", []),
             "summary_stats": final_state.get("summary_stats", {}),
-            "db_status": final_state.get("db_status")
+            "db_status": final_state.get("db_status"),
+            "cespe_questions_count": len(cespe_questions),
+            "cespe_questions": cespe_questions,
+            "revisoes_agendadas": final_state.get("revisoes_agendadas", {})
         }
     except Exception as e:
         logger.error(f"Erro no processamento do grafo: {e}")

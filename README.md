@@ -122,12 +122,14 @@ O pipeline é orquestrado de forma assíncrona com streaming Server-Sent Events 
 
 | Estágio | Nó | Papel & Modelo |
 | :--- | :--- | :--- |
-| 1 | `video_search` | Obtém transcrição de URL do YouTube via `youtube-transcript-api` ou sintetiza aula profunda via LLM Tier Fast se nenhum texto for fornecido. |
+| 1 | `video_search` | Obtém transcrição de URL do YouTube via `youtube-transcript-api` ou sintetiza aula profunda via LLM (`glm-5.3-flash`) se nenhum texto for fornecido. |
 | 2 | `validate_video` | Consulta `videos_processados` para prevenir reprocessamento acidental de links idênticos. |
-| 3 | `extraction_agent` | LLM Tier Fast (`deepseek-v4-flash`) extrai itens estruturados via Pydantic (`ConjuntoItemsExtraidos`). |
+| 3 | `extraction_agent` | LLM (`glm-5.3-flash`) extrai itens estruturados via Pydantic (`ConjuntoItemsExtraidos`). |
 | 4 | `retrieve_similar_items` | Consulta pgvector para ancoragem no Tópico Mestre (`search_master_topic`) e carrega todo o acervo histórico anterior. |
-| 5 | `reconciliation_agent` | LLM Tier Mid (`mimo-v2.5-pro`) atua como Curador-Chefe comparando candidato a candidato: descarta redundâncias e vincula novidades ao mestre. |
+| 5 | `reconciliation_agent` | LLM (`glm-5.3-flash`) atua como Curador-Chefe comparando candidato a candidato: descarta redundâncias e vincula novidades ao mestre. |
 | 6 | `db_writer` | Persiste vídeos, insere novos tópicos mestres, anexa linhas filhas com `parent_id` e atualiza JSONB. |
+| 7 | `cespe_agent` | Formula questões assertivas inéditas no padrão CESPE/Cebraspe (Certo/Errado) focando em pegadinhas (`glm-5.3-flash`). |
+| 8 | `revisao_scheduler` | Agenda o ciclo de revisões ativas no motor de repetição espaçada (Curva de Ebbinghaus). |
 
 ---
 
@@ -247,13 +249,13 @@ A suíte em `tests/` cobre 100% dos fluxos essenciais:
 
 ---
 
-## ⚕ Hermes Agent (DeepSeek V4 Pro & LiteLLM FinOps)
+## ⚕ Hermes Agent (GLM 5.3 Flash & LiteLLM FinOps)
 
 O projeto conta com o **Hermes Agent** integrado para assistência autônoma, diagnósticos e automações no workspace:
 
-- **Modelo**: `deepseek/deepseek-v4-pro` (via OpenRouter credits).
+- **Modelo**: `glm-5.3-flash` / `z-ai/glm-5.3-flash` (via OpenRouter credits).
 - **Roteador**: Gateway LiteLLM local (`http://127.0.0.1:4000/v1`).
-- **Chave Virtual Exclusiva**: `vk-hermes-agent` — isolamento estrito de orçamento e custos.
+- **Chave Virtual Exclusiva Ativa**: `vk-hermes-agent-glm-5.3-flash` (`sk-T-arQ7cEWBQo0H6xNkMCmA`) — isolamento estrito de orçamento e custos.
 - **Observabilidade**: Todas as chamadas geram traces individuais no **Langfuse** com tags do projeto e do agente.
 
 ### Comandos:
@@ -268,6 +270,116 @@ O projeto conta com o **Hermes Agent** integrado para assistência autônoma, di
 ./scripts/hermes.sh doctor
 
 # Consultar gasto acumulado do Hermes Agent no LiteLLM:
-curl -s -H "Authorization: Bearer sk-master-..." "http://127.0.0.1:4000/key/info?key=sk-21UOyNaNyaSvwc7bvj5Dxg"
+curl -s -H "Authorization: Bearer sk-master-5184388f4d1f9ae9299217ce84dccaf0d3bf2c78c5aa0a2db831ad308e82a721" \
+  "http://127.0.0.1:4000/key/info?key=sk-T-arQ7cEWBQo0H6xNkMCmA" | jq .info
 ```
+
+---
+
+## 🔑 Guia de Gestão e Troca de Virtual Keys (FinOps & Monitoramento)
+
+Este roteiro serve como referência para criar, rotacionar e auditar as Virtual Keys no LiteLLM Gateway, tanto para o **Hermes Agent** quanto para os **agentes do pipeline RAG** e outros serviços do homelab.
+
+### 1. Como Criar uma Nova Virtual Key no LiteLLM
+
+Para criar uma chave exclusiva com orçamento e modelos permitidos:
+
+```bash
+curl -s -X POST "http://127.0.0.1:4000/key/generate" \
+  -H "Authorization: Bearer sk-master-5184388f4d1f9ae9299217ce84dccaf0d3bf2c78c5aa0a2db831ad308e82a721" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "models": ["z-ai/glm-5.3-flash", "glm-5.3-flash"],
+    "metadata": {
+      "project": "study-rag-agent",
+      "agent": "hermes",
+      "model_intent": "glm-5.3-flash"
+    },
+    "key_alias": "vk-hermes-agent-glm-5.3-flash"
+  }' | jq .
+```
+> O retorno conterá o token no campo `"key"` (ex: `sk-...`). Guarde este valor, pois ele só é exibido na criação.
+
+---
+
+### 2. Onde Atualizar a Chave do Hermes Agent
+
+Ao rotacionar ou trocar a chave do Hermes, atualize os seguintes locais:
+
+1. **Configuração Global do Hermes (`~/.hermes/.env`)**:
+   ```bash
+   HERMES_LITELLM_KEY=sk-NOVA_CHAVE
+   OPENROUTER_API_KEY=sk-NOVA_CHAVE
+   ```
+
+2. **Modelo Padrão do Hermes (`~/.hermes/config.yaml`)**:
+   ```yaml
+   model:
+     base_url: http://127.0.0.1:4000/v1
+     default: glm-5.3-flash
+     provider: litellm
+
+   custom_providers:
+   - base_url: http://127.0.0.1:4000/v1
+     key_env: HERMES_LITELLM_KEY
+     model: glm-5.3-flash
+     name: litellm
+   ```
+
+3. **Ambiente do Repositório (`study-rag-agent/.env`)**:
+   ```bash
+   HERMES_LITELLM_KEY=sk-NOVA_CHAVE
+   ```
+
+4. **Script de Inicialização (`scripts/hermes.sh`)**:
+   ```bash
+   export HERMES_LITELLM_KEY="${HERMES_LITELLM_KEY:-sk-NOVA_CHAVE}"
+   ```
+
+---
+
+### 3. Onde Atualizar as Chaves dos Demais Agentes do Pipeline
+
+Para alterar a chave dos nós do LangGraph ou de outros agentes:
+
+1. **Pipeline de Estudos (`study-rag-agent/.env`)**:
+   ```bash
+   # Chave que autentica as chamadas do LangGraph no LiteLLM
+   LITELLM_API_KEY=sk-SUA_VIRTUAL_KEY_PIPELINE
+   ```
+   *Se usar uma virtual key dedicada para o pipeline em vez da master key, configure os modelos permitidos (`["fast", "mid", "strong"]`) na criação da chave.*
+
+2. **Configuração de Modelos no Gateway LiteLLM (`/home/athos/llm-gateway/config.yaml`)**:
+   - `DEFAULT_LLM_MODEL`: `glm-5.3-flash` (unificado para todos os agentes: extração, reconciliação e questões Cespe)
+   - Aliases adicionais suportados: `z-ai/glm-5.3-flash`, `deepseek-v4.1-flash`, `strong` (`z-ai/glm-5.2`)
+   *Para adicionar novos modelos ao gateway, edite o `config.yaml` do `llm-gateway` e reinicie o container: `docker restart litellm`.*
+
+---
+
+### 4. Monitoramento e Auditoria de Consumo (FinOps)
+
+#### Listar todas as chaves ativas:
+```bash
+curl -s -H "Authorization: Bearer sk-master-5184388f4d1f9ae9299217ce84dccaf0d3bf2c78c5aa0a2db831ad308e82a721" \
+  "http://127.0.0.1:4000/key/list" | jq .
+```
+
+#### Consultar consumo em tempo real de uma chave:
+```bash
+curl -s -H "Authorization: Bearer sk-master-5184388f4d1f9ae9299217ce84dccaf0d3bf2c78c5aa0a2db831ad308e82a721" \
+  "http://127.0.0.1:4000/key/info?key=sk-T-arQ7cEWBQo0H6xNkMCmA" | jq .info
+```
+*Campos principais retornados:*
+- `spend`: Total acumulado em USD ($).
+- `models`: Lista de modelos autorizados.
+- `last_active`: Timestamp da última requisição.
+- `metadata`: Metadados do projeto e agente.
+
+#### Observabilidade no Langfuse:
+- Acesse [Langfuse Cloud](https://cloud.langfuse.com).
+- Filtre por:
+  - `tags` ou `metadata.project`: `study-rag-agent`
+  - `metadata.agent`: `hermes`
+  - `key_alias`: `vk-hermes-agent-glm-5.3-flash`
+
 

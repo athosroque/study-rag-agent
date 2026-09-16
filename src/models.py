@@ -167,6 +167,21 @@ class RespostaRevisaoLoteRequest(BaseModel):
     respostas: List[RespostaRevisaoRequest] = Field(default_factory=list)
 
 
+class QuestaoCespe(BaseModel):
+    topico: str = Field(description="Subtópico ou aspecto específico avaliado")
+    enunciado: str = Field(description="Assertiva no estilo CESPE/Cebraspe para julgamento de CERTO ou ERRADO")
+    gabarito: Literal["CERTO", "ERRADO"] = Field(description="Gabarito oficial da assertiva: 'CERTO' ou 'ERRADO'")
+    justificativa: str = Field(description="Fundamentação teórica, doutrinária, jurisprudencial ou legal da assertiva")
+    pegadinha_explicada: str = Field(description="Explicação detalhada da armadilha, sutileza ou exceção explorada pela banca")
+
+
+class ConjuntoQuestoesCespe(BaseModel):
+    questoes: List[QuestaoCespe] = Field(
+        default_factory=list,
+        description="Lista de questões inéditas no estilo CESPE/Cebraspe focadas em pegadinhas e pontos não abordados"
+    )
+
+
 class StudyState(TypedDict, total=False):
     tema_busca: str
     materia: Optional[str]
@@ -180,3 +195,5 @@ class StudyState(TypedDict, total=False):
     master_topic_id: Optional[int]
     db_status: str
     summary_stats: Dict[str, int]
+    cespe_questions: List[Dict[str, Any]]
+    revisoes_agendadas: Dict[str, Any]

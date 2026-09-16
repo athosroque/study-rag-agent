@@ -62,3 +62,18 @@ def test_relatorio_reconciliacao():
     relatorio = RelatorioReconciliacao(decisoes=[dec])
     assert len(relatorio.decisoes) == 1
     assert relatorio.decisoes[0].acao == "CRIAR_NOVO"
+
+
+def test_questao_cespe_creation():
+    from src.models import QuestaoCespe, ConjuntoQuestoesCespe
+    q = QuestaoCespe(
+        topico="Atributos do Ato",
+        enunciado="A autoexecutoriedade é atributo presente em todos os atos administrativos, sem exceção.",
+        gabarito="ERRADO",
+        justificativa="A autoexecutoriedade não existe em todos os atos (ex: cobrança de multa).",
+        pegadinha_explicada="A banca usou o termo absolutista 'todos... sem exceção'."
+    )
+    assert q.gabarito == "ERRADO"
+    conjunto = ConjuntoQuestoesCespe(questoes=[q])
+    assert len(conjunto.questoes) == 1
+    assert conjunto.questoes[0].topico == "Atributos do Ato"

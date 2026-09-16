@@ -77,28 +77,34 @@ def flush_langfuse():
 
 
 def get_llm(
-    tier: str = "fast",
+    model: Optional[str] = None,
+    tier: Optional[str] = None,
     temperature: float = 0.1,
     max_tokens: int = 4096,
     callbacks: Optional[List[Any]] = None
 ) -> ChatOpenAI:
     """
     Retorna uma instância de ChatOpenAI configurada para o LiteLLM.
-    Tiers suportados: 'fast', 'mid', 'strong'.
+    Suporta especificação direta do modelo (ex: 'glm-5.3-flash') ou via tier legado.
     """
-    model_map = {
-        "fast": settings.MODEL_FAST,
-        "mid": settings.MODEL_MID,
-        "strong": settings.MODEL_STRONG,
-    }
-    model_name = model_map.get(tier.lower(), settings.MODEL_FAST)
+    if model:
+        model_name = model
+    elif tier:
+        model_map = {
+            "fast": settings.MODEL_FAST,
+            "mid": settings.MODEL_MID,
+            "strong": settings.MODEL_STRONG,
+        }
+        model_name = model_map.get(tier.lower(), settings.DEFAULT_LLM_MODEL)
+    else:
+        model_name = settings.DEFAULT_LLM_MODEL
 
     all_callbacks = list(callbacks or [])
     lf_callback = get_langfuse_callback()
     if lf_callback and lf_callback not in all_callbacks:
         all_callbacks.append(lf_callback)
 
-    logger.info(f"Instanciando LLM tier '{tier}' -> modelo '{model_name}' em {settings.LITELLM_BASE_URL}")
+    logger.info(f"Instanciando LLM -> modelo '{model_name}' em {settings.LITELLM_BASE_URL}")
 
     return ChatOpenAI(
         model=model_name,
