@@ -79,7 +79,7 @@ def clean_transcript(text: str) -> str:
     return cleaned.strip()
 
 
-def chunk_transcript(text: str, chunk_size: int = 10000, overlap: int = 800) -> List[str]:
+def chunk_transcript(text: str, chunk_size: int = 5000, overlap: int = 800) -> List[str]:
     """
     Divide uma transcrição longa em blocos pedagógicos gerenciáveis,
     respeitando limites de frases e aplicando sobreposição (overlap).
@@ -310,7 +310,7 @@ def extraction_agent_node(state: StudyState) -> Dict[str, Any]:
         logger.warning("[extraction_agent] Texto insuficiente ou vazio para extração.")
         return {"extracted_items": []}
 
-    chunks = chunk_transcript(cleaned_text, chunk_size=10000, overlap=800)
+    chunks = chunk_transcript(cleaned_text, chunk_size=5000, overlap=800)
     logger.info(f"[extraction_agent] Transcrição ({len(cleaned_text)} caracteres) dividida em {len(chunks)} bloco(s).")
 
     llm = get_llm(model="glm-5.3-flash", temperature=0.1, max_tokens=8192)
@@ -328,8 +328,11 @@ def extraction_agent_node(state: StudyState) -> Dict[str, Any]:
             "  * 'teoria': Conceito fundamental, regra geral ou doutrina.\n"
             "  * 'sacada': Mnemônico, atalho mental, macete ou dica de memorização.\n"
             "  * 'pegadinha': Armadilha de prova, exceção contra-intuitiva ou sutileza semântica.\n"
-            "  * 'questao': Pergunta chave de fixação com sua resposta e explicação.\n\n"
-            "Seja preciso e não resuma excessivamente o conhecimento essencial."
+            "  * 'questao': Questão de fixação. ATENÇÃO ESTRITA:\n"
+            "    - Coloque no campo 'conteudo' EXCLUSIVAMENTE o enunciado/pergunta da assertiva (NUNCA coloque a resposta dentro de 'conteudo'). O gabarito oficial ou resposta direta (ex: 'CERTO', 'ERRADO', 'Alternativa B', ou resposta objetiva concisa) DEVE ser colocado no campo 'gabarito'. Justificativas, resoluções comentadas e notas pedagógicas complementares DEVEM ir no campo 'detalhes_resposta'.\n"
+            "    - REGRA CRÍTICA DE AUTOSSUFICIÊNCIA: O enunciado DEVE ser 100% autossuficiente e respondível de forma autônoma sem texto de apoio externo. NUNCA extraia perguntas que façam referências cegas a 'do texto', 'no texto', 'o autor', 'na linha X' a menos que a frase ou excerto completo analisado esteja integralmente transcrito dentro do próprio enunciado. Em matérias como Língua Portuguesa (colocação pronominal, crase, concordância, regência, pontuação), forneça OBRIGATORIAMENTE a oração ou frase completa na pergunta para que o estudante possa julgar a regra gramatical. Se o professor citou uma questão de slide cujo texto não foi lido ou não está presente, NÃO extraia como questão truncada: reformule a pergunta para que fique conceitualmente autônoma (ex: 'Considerando uma oração em que haja termo invariável atrativo antes do verbo...'), ou extraia o conhecimento como 'teoria' ou 'pegadinha'.\n\n"
+            "Seja preciso e não resuma excessivamente o conhecimento essencial.\n"
+            "MUITO IMPORTANTE: A resposta DEVE ser estritamente um JSON válido. NÃO utilize blocos de código Markdown (```json ... ```). NÃO escreva nenhum texto fora do JSON."
         ),
         ("user", "Matéria Informada: {materia_hint}\nTema da Aula: {tema}{bloco_info}\n\nTranscrição:\n{chunk_text}")
     ])
@@ -347,12 +350,35 @@ def extraction_agent_node(state: StudyState) -> Dict[str, Any]:
                 "bloco_info": bloco_info,
                 "chunk_text": chunk
             })
-            result: ConjuntoItemsExtraidos = structured_llm.invoke(prompt_val)
-            chunk_items = [item.model_dump() for item in result.items]
+            try:
+                result: ConjuntoItemsExtraidos = structured_llm.invoke(prompt_val)
+                chunk_items = [item.model_dump() for item in result.items]
+            except Exception as e:
+                logger.warning(f"[extraction_agent] Pydantic parser falhou, tentando fallback manual. Erro: {e}")
+                # Fazendo request manual e limpando markdown
+                raw_llm = get_llm(model="glm-5.3-flash", temperature=0.1, max_tokens=8192)
+                raw_response = raw_llm.invoke(prompt_val)
+                text = raw_response.content
+                import re
+                match = re.search(r'```(?:json)?\s*(.*?)\s*```', text, re.DOTALL)
+                if match:
+                    text = match.group(1)
+                try:
+                    data = json.loads(text)
+                    # Verifica se data é uma lista (formato que alguns modelos devolvem)
+                    if isinstance(data, list):
+                        result = ConjuntoItemsExtraidos(items=data)
+                    else:
+                        result = ConjuntoItemsExtraidos.model_validate(data)
+                    chunk_items = [item.model_dump() for item in result.items]
+                except Exception as parse_err:
+                    logger.error(f"[extraction_agent] Fallback falhou também: {parse_err}")
+                    chunk_items = []
+            
             logger.info(f"[extraction_agent] Bloco {idx + 1}/{len(chunks)}: {len(chunk_items)} itens extraídos.")
             all_extracted.extend(chunk_items)
         except Exception as e:
-            logger.error(f"[extraction_agent] Erro ao extrair itens do bloco {idx + 1}/{len(chunks)}: {e}")
+            logger.error(f"[extraction_agent] Erro fatal no processamento do bloco {idx + 1}/{len(chunks)}: {e}")
 
     # Normaliza a matéria de todos os itens extraídos para evitar variações
     for item in all_extracted:
@@ -486,7 +512,9 @@ def reconciliation_agent_node(state: StudyState) -> Dict[str, Any]:
                 "   - Questões de fixação, pegadinhas de prova e sacadas INÉDITAS que agreguem novidade pedagógica real DEVEM ser 'ADICIONAR_FRAGMENTO' com 'item_id_referencia' apontando para o Tópico Mestre.\n"
                 "2. TÓPICO MESTRE INÉDITO (quando nenhum tópico existente corresponder ao tema):\n"
                 "   - A teoria central deve ser 'CRIAR_NOVO' como Tópico Mestre da matéria.\n"
-                "   - As sacadas, pegadinhas e questões da aula devem ser 'CRIAR_NOVO' vinculadas hierarquicamente ao Tópico Mestre.\n\n"
+                "   - As sacadas, pegadinhas e questões da aula devem ser 'CRIAR_NOVO' vinculadas hierarquicamente ao Tópico Mestre.\n"
+                "3. CURADORIA DE AUTOSSUFICIÊNCIA EM QUESTÕES:\n"
+                "   - Toda questão mantida ('ADICIONAR_FRAGMENTO' ou 'CRIAR_NOVO') deve ter enunciado autossuficiente e respondível sem texto externo de apoio. Se a questão contiver referências órfãs a 'do texto', 'no texto', 'na linha X' sem a oração/frase suporte transcrita no corpo da pergunta, REFORMULE em 'conteudo_incremental' fornecendo a contextualização autônoma necessária, ou tome a ação 'DESCARTAR' se for impossível responder sem o slide do professor.\n\n"
                 "Forneça SEMPRE uma justificativa técnica e pedagógica precisa para cada decisão."
             ),
             (
@@ -498,21 +526,80 @@ def reconciliation_agent_node(state: StudyState) -> Dict[str, Any]:
                 "{existing_db}\n\n"
                 "NOVOS ITENS CANDIDATOS:\n"
                 "{extracted_candidates}\n\n"
-                "Emita o relatório de reconciliação estruturado."
+                "Emita o relatório de reconciliação estruturado informando o 'indice_candidato' (posição numérica na lista de 0 a N) para identificar a qual candidato a decisão se refere.\n"
+                "MUITO IMPORTANTE: A resposta DEVE ser estritamente um JSON válido. NÃO utilize blocos de código Markdown (```json ... ```). NÃO escreva nenhum texto fora do JSON."
             )
         ])
 
-        llm = get_llm(model="glm-5.3-flash", temperature=0.1, max_tokens=4096)
-        structured_llm = llm.with_structured_output(RelatorioReconciliacao)
-        prompt_val = prompt.invoke({
-            "materia": materia,
-            "tema": tema,
-            "master_id_str": str(master_id) if master_id else "Nenhum (Matéria/Tópico Inédito)",
-            "existing_db": json.dumps(existing, ensure_ascii=False, indent=2),
-            "extracted_candidates": json.dumps(extracted, ensure_ascii=False, indent=2)
-        })
-        res: RelatorioReconciliacao = structured_llm.invoke(prompt_val)
-        decisions = [d.model_dump() for d in res.decisoes]
+        decisions = []
+        import concurrent.futures
+
+        def process_batch(batch):
+            indexed_batch = [{"indice_candidato": i, **item} for i, item in enumerate(batch)]
+            prompt_val = prompt.invoke({
+                "materia": materia,
+                "tema": tema,
+                "master_id_str": str(master_id) if master_id else "Nenhum (Matéria/Tópico Inédito)",
+                "existing_db": json.dumps(existing, ensure_ascii=False, indent=2),
+                "extracted_candidates": json.dumps(indexed_batch, ensure_ascii=False, indent=2)
+            })
+            llm = get_llm(model="glm-5.3-flash", temperature=0.1, max_tokens=4096)
+            structured_llm = llm.with_structured_output(RelatorioReconciliacao)
+            try:
+                res: RelatorioReconciliacao = structured_llm.invoke(prompt_val)
+                final_decisions = []
+                for d in res.decisoes:
+                    d_dict = d.model_dump()
+                    idx = d_dict.pop("indice_candidato", -1)
+                    if 0 <= idx < len(batch):
+                        d_dict["item"] = batch[idx]
+                        final_decisions.append(d_dict)
+                return final_decisions
+            except Exception as e:
+                logger.warning(f"[reconciliation_agent] Pydantic parser falhou no batch, tentando fallback manual. Erro: {e}")
+                raw_llm = get_llm(model="glm-5.3-flash", temperature=0.1, max_tokens=4096)
+                raw_response = raw_llm.invoke(prompt_val)
+                text = raw_response.content
+                import re
+                match = re.search(r'```(?:json)?\s*(.*?)\s*```', text, re.DOTALL)
+                if match:
+                    text = match.group(1)
+                try:
+                    data = json.loads(text)
+                    if isinstance(data, list):
+                        res = RelatorioReconciliacao(decisoes=data)
+                    elif "decisoes" in data:
+                        res = RelatorioReconciliacao.model_validate(data)
+                    else:
+                        res = RelatorioReconciliacao(decisoes=[])
+                    
+                    final_decisions = []
+                    for d in res.decisoes:
+                        d_dict = d.model_dump()
+                        idx = d_dict.pop("indice_candidato", -1)
+                        if 0 <= idx < len(batch):
+                            d_dict["item"] = batch[idx]
+                            final_decisions.append(d_dict)
+                    return final_decisions
+                except Exception as parse_err:
+                    logger.error(f"[reconciliation_agent] Falha no fallback do batch: {parse_err}")
+                    raise
+
+        batch_size = 5
+        batches = [extracted[i:i + batch_size] for i in range(0, len(extracted), batch_size)]
+        logger.info(f"[reconciliation_agent] Processando {len(batches)} lote(s) em paralelo (tamanho máx: {batch_size}).")
+        
+        with concurrent.futures.ThreadPoolExecutor(max_workers=5) as executor:
+            future_to_batch = {executor.submit(process_batch, b): i for i, b in enumerate(batches)}
+            for future in concurrent.futures.as_completed(future_to_batch):
+                batch_idx = future_to_batch[future]
+                try:
+                    batch_decisions = future.result()
+                    decisions.extend(batch_decisions)
+                    logger.info(f"[reconciliation_agent] Lote {batch_idx+1}/{len(batches)} concluído com {len(batch_decisions)} decisões.")
+                except Exception as exc:
+                    logger.error(f"[reconciliation_agent] Lote {batch_idx+1}/{len(batches)} gerou exceção: {exc}")
+                    raise exc
     except Exception as e:
         logger.error(f"[reconciliation_agent] Falha no LLM de reconciliação: {e}. Aplicando contingência hierárquica.")
         decisions = []
@@ -521,26 +608,26 @@ def reconciliation_agent_node(state: StudyState) -> Dict[str, Any]:
             if master_id is not None:
                 # Tópico mestre já existe: teorias repetitivas são descartadas, sacadas/pegadinhas/questões agregadas
                 if item_obj.categoria == "teoria":
-                    decisions.append(DecisaoIntegracao(
-                        item=item_obj,
-                        acao="DESCARTAR",
-                        justificativa=f"Teoria base já coberta no Tópico Mestre ID {master_id}."
-                    ).model_dump())
+                    decisions.append({
+                        "item": item_dict,
+                        "acao": "DESCARTAR",
+                        "justificativa": f"Teoria base já coberta no Tópico Mestre ID {master_id}."
+                    })
                 else:
-                    decisions.append(DecisaoIntegracao(
-                        item=item_obj,
-                        acao="ADICIONAR_FRAGMENTO",
-                        item_id_referencia=master_id,
-                        conteudo_incremental=item_obj.conteudo,
-                        justificativa=f"Novidade ({item_obj.categoria}) vinculada ao Tópico Mestre ID {master_id}."
-                    ).model_dump())
+                    decisions.append({
+                        "item": item_dict,
+                        "acao": "ADICIONAR_FRAGMENTO",
+                        "item_id_referencia": master_id,
+                        "conteudo_incremental": item_obj.conteudo,
+                        "justificativa": f"Novidade ({item_obj.categoria}) vinculada ao Tópico Mestre ID {master_id}."
+                    })
             else:
                 # Tópico inédito
-                decisions.append(DecisaoIntegracao(
-                    item=item_obj,
-                    acao="CRIAR_NOVO",
-                    justificativa="Matéria inédita na base de conhecimento."
-                ).model_dump())
+                decisions.append({
+                    "item": item_dict,
+                    "acao": "CRIAR_NOVO",
+                    "justificativa": "Matéria inédita na base de conhecimento."
+                })
 
     logger.info(f"[reconciliation_agent] {len(decisions)} decisões de reconciliação processadas.")
     return {"reconciliation_decisions": decisions}
@@ -578,6 +665,17 @@ def db_writer_node(state: StudyState) -> Dict[str, Any]:
 
     stats = {"criados": 0, "fragmentos": 0, "descartados": 0}
     current_master_id = master_id
+    masters_by_topic: Dict[str, int] = {}
+    active_master_ids = set()
+
+    if current_master_id is not None:
+        active_master_ids.add(current_master_id)
+        try:
+            m_item = db.get_item_by_id(current_master_id)
+            if m_item and m_item.get("topico"):
+                masters_by_topic[m_item["topico"].strip().lower()] = current_master_id
+        except Exception:
+            pass
 
     # 1. Se não há Tópico Mestre existente, elege/cria o Tópico Mestre primeiro
     if current_master_id is None:
@@ -600,6 +698,8 @@ def db_writer_node(state: StudyState) -> Dict[str, Any]:
                 parent_id=None,
                 materia_id=materia_id
             )
+            active_master_ids.add(current_master_id)
+            masters_by_topic[item_obj.topico.strip().lower()] = current_master_id
             logger.info(f"[db_writer] Tópico Mestre Criado: ID {current_master_id} ('{item_obj.topico}', Matéria ID: {materia_id})")
             stats["criados"] += 1
             master_dec["_ja_processado_como_mestre"] = True
@@ -620,10 +720,12 @@ def db_writer_node(state: StudyState) -> Dict[str, Any]:
                 parent_id=None,
                 materia_id=materia_id
             )
+            active_master_ids.add(current_master_id)
+            masters_by_topic[tema.strip().lower()] = current_master_id
             logger.info(f"[db_writer] Tópico Mestre Fallback Criado: ID {current_master_id} ('{tema}')")
             stats["criados"] += 1
 
-    # 2. Processa todos os itens restantes vinculando ao current_master_id e materia_id
+    # 2. Processa todos os itens restantes vinculando ao mestre correspondente do seu tópico
     for dec in decisoes:
         if dec.get("_ja_processado_como_mestre"):
             continue
@@ -633,14 +735,26 @@ def db_writer_node(state: StudyState) -> Dict[str, Any]:
         item_obj = ItemEstudo(**item_data)
         justificativa = dec.get("justificativa", "")
         conteudo_inc = dec.get("conteudo_incremental") or item_obj.conteudo
-        ref_id = dec.get("item_id_referencia") or current_master_id
+        ref_id = dec.get("item_id_referencia")
 
         if acao == "DESCARTAR":
             logger.info(f"[db_writer] DESCARTAR: Item '{item_obj.topico}' redundante.")
             stats["descartados"] += 1
 
         elif acao == "ADICIONAR_FRAGMENTO":
-            target_id = ref_id or current_master_id
+            # Tenta resolver o target: ref_id explícito ou correspondência no mapa de tópicos mestres
+            target_id = ref_id
+            if target_id is None:
+                item_topic_clean = (item_obj.topico or "").strip().lower()
+                target_id = masters_by_topic.get(item_topic_clean)
+                if target_id is None:
+                    for t_name, m_id in masters_by_topic.items():
+                        if t_name in item_topic_clean or item_topic_clean in t_name:
+                            target_id = m_id
+                            break
+            if target_id is None:
+                target_id = current_master_id
+
             if target_id is not None:
                 texto = f"Tópico: {item_obj.topico} - {conteudo_inc}"
                 vetor = embedding_manager.embed_query(texto)
@@ -649,46 +763,85 @@ def db_writer_node(state: StudyState) -> Dict[str, Any]:
                     topico=item_obj.topico,
                     categoria=item_obj.categoria,
                     conteudo_incremental=conteudo_inc,
+                    gabarito=item_obj.gabarito,
                     detalhes_resposta=item_obj.detalhes_resposta,
                     justificativa=justificativa,
                     link_do_video=link,
                     embedding=vetor,
                     materia_id=materia_id
                 )
+                active_master_ids.add(target_id)
                 logger.info(f"[db_writer] ADICIONAR_FRAGMENTO: Enriquecido ID {target_id} com '{item_obj.topico}'")
                 stats["fragmentos"] += 1
             else:
                 stats["descartados"] += 1
 
         elif acao == "CRIAR_NOVO":
-            target_id = current_master_id
             texto = f"Tópico: {item_obj.topico} - {item_obj.conteudo}"
             vetor = embedding_manager.embed_query(texto)
-            if target_id:
-                db.append_fragment_to_item(
-                    item_id=target_id,
-                    topico=item_obj.topico,
-                    categoria=item_obj.categoria,
-                    conteudo_incremental=item_obj.conteudo,
-                    detalhes_resposta=item_obj.detalhes_resposta,
-                    justificativa=justificativa,
-                    link_do_video=link,
-                    embedding=vetor,
-                    materia_id=materia_id
-                )
-                stats["fragmentos"] += 1
-                logger.info(f"[db_writer] CRIAR_NOVO vinculado ao Mestre ID {target_id} (Matéria ID: {materia_id})")
-            else:
-                child_id = db.insert_new_item(
+            item_topic_clean = (item_obj.topico or "").strip().lower()
+
+            # Se for teoria de um tópico novo e independente, cria como Tópico Mestre
+            eh_novo_mestre = (
+                item_obj.categoria == "teoria" and
+                item_topic_clean not in masters_by_topic and
+                not any(t in item_topic_clean or item_topic_clean in t for t in masters_by_topic)
+            )
+
+            if eh_novo_mestre:
+                new_m_id = db.insert_new_item(
                     item=item_obj,
                     embedding=vetor,
                     link_do_video=link,
                     parent_id=None,
                     materia_id=materia_id
                 )
-                current_master_id = child_id
+                active_master_ids.add(new_m_id)
+                masters_by_topic[item_topic_clean] = new_m_id
                 stats["criados"] += 1
-                logger.info(f"[db_writer] CRIAR_NOVO Novo Tópico Mestre ID {child_id}")
+                logger.info(f"[db_writer] CRIAR_NOVO Novo Tópico Mestre Independente ID {new_m_id} ('{item_obj.topico}')")
+            else:
+                # Procura o mestre temático mais apropriado
+                target_id = ref_id
+                if target_id is None:
+                    target_id = masters_by_topic.get(item_topic_clean)
+                    if target_id is None:
+                        for t_name, m_id in masters_by_topic.items():
+                            if t_name in item_topic_clean or item_topic_clean in t_name:
+                                target_id = m_id
+                                break
+                if target_id is None:
+                    target_id = current_master_id
+
+                if target_id:
+                    db.append_fragment_to_item(
+                        item_id=target_id,
+                        topico=item_obj.topico,
+                        categoria=item_obj.categoria,
+                        conteudo_incremental=item_obj.conteudo,
+                        gabarito=item_obj.gabarito,
+                        detalhes_resposta=item_obj.detalhes_resposta,
+                        justificativa=justificativa,
+                        link_do_video=link,
+                        embedding=vetor,
+                        materia_id=materia_id
+                    )
+                    active_master_ids.add(target_id)
+                    stats["fragmentos"] += 1
+                    logger.info(f"[db_writer] CRIAR_NOVO vinculado ao Mestre ID {target_id} (Matéria ID: {materia_id})")
+                else:
+                    child_id = db.insert_new_item(
+                        item=item_obj,
+                        embedding=vetor,
+                        link_do_video=link,
+                        parent_id=None,
+                        materia_id=materia_id
+                    )
+                    current_master_id = child_id
+                    active_master_ids.add(child_id)
+                    masters_by_topic[item_topic_clean] = child_id
+                    stats["criados"] += 1
+                    logger.info(f"[db_writer] CRIAR_NOVO Novo Tópico Mestre ID {child_id}")
 
     status_msg = (
         f"Reconciliação concluída: {stats['criados']} tópicos mestres criados, "
@@ -701,6 +854,7 @@ def db_writer_node(state: StudyState) -> Dict[str, Any]:
         "db_status": status_msg,
         "summary_stats": stats,
         "master_topic_id": current_master_id,
+        "active_master_ids": list(active_master_ids),
         "materia_id": materia_id,
         "materia": materia
     }
@@ -713,37 +867,86 @@ def db_writer_node(state: StudyState) -> Dict[str, Any]:
 def cespe_agent_node(state: StudyState) -> Dict[str, Any]:
     """
     AGENTE CESPE/CEBRASPE (GLM 5.3 Flash):
-    Analisa o conhecimento acumulado no banco de dados (tópicos, teorias, sacadas, pegadinhas e questões já existentes),
-    identifica lacunas pedagógicas e formula questões inéditas no padrão Cespe (Certo/Errado) focando em pegadinhas.
-    Persiste as questões geradas no PostgreSQL vinculadas ao tópico mestre.
+    Itera sobre todos os Tópicos Mestres ativados/criados na aula,
+    identifica lacunas pedagógicas e formula questões inéditas de nível médio/alto.
     """
-    master_id = state.get("master_topic_id")
-    tema = state.get("tema_busca", "Geral")
-    materia = state.get("materia", "Geral")
-    materia_id = state.get("materia_id")
+    master_id_default = state.get("master_topic_id")
+    active_master_ids = state.get("active_master_ids", [])
+    
+    if not active_master_ids and master_id_default is not None:
+        active_master_ids = [master_id_default]
+
+    tema_geral = state.get("tema_busca", "Geral")
+    materia_geral = state.get("materia", "Geral")
+    materia_id_geral = state.get("materia_id")
     video = state.get("video_encontrado") or {}
     link = video.get("link")
 
-    logger.info(f"[cespe_agent] Iniciando formulação de questões CESPE/Cebraspe para '{tema}' (Master ID: {master_id})...")
+    logger.info(f"[cespe_agent] Iniciando formulação de questões CESPE para {len(active_master_ids)} tópicos ativos...")
 
-    # 1. Recupera o histórico consolidado do banco de dados
-    master_item = None
-    if master_id:
-        try:
-            master_item = db.get_item_by_id(master_id)
-        except Exception as e:
-            logger.warning(f"[cespe_agent] Não foi possível carregar item mestre {master_id}: {e}")
+    llm = get_llm(model="glm-5.3-flash", temperature=0.2, max_tokens=4096)
+    structured_llm = llm.with_structured_output(ConjuntoQuestoesCespe)
 
-    # Monta o contexto teórico e identifica questões prévias
-    contexto_teorico: List[str] = []
-    questoes_existentes: List[str] = []
-    pegadinhas_existentes: List[str] = []
-    sacadas_existentes: List[str] = []
+    prompt = ChatPromptTemplate.from_messages([
+        (
+            "system",
+            "Você é um Examinador Sênior e Especialista de Bancas de Concurso Público, com foco estrito no padrão CESPE / CEBRASPE.\n\n"
+            "Sua missão é analisar o acervo pedagógico acumulado no banco de dados para um tópico específico e gerar NOVAS questões inéditas no formato CERTO ou ERRADO.\n\n"
+            "DIRETRIZES FUNDAMENTAIS DA BANCA CESPE/CEBRASPE:\n"
+            "1. INEDITISMO E NÃO-DUPLICAÇÃO: Verifique atentamente a lista de 'Questões Já Existentes'. É expressamente proibido formular questões redundantes ou repetições literais das já cadastradas.\n"
+            "2. NÍVEL DE DIFICULDADE (MÉDIO/ALTO): Gere APENAS questões que exijam profundidade, conhecimento de jurisprudência ou entendimento de exceções e pegadinhas. Ignore completamente conceitos básicos, literais ou introdutórios (eles não precisam virar questão).\n"
+            "3. QUANTIDADE DE QUESTÕES: Gere quantas questões forem necessárias para esgotar as pegadinhas e sacadas relevantes deste tópico. Não há limite numérico (gere 1, 3, 5 ou mais), mas mantenha o nível de exigência alto.\n"
+            "4. PADRÃO CESPE/CEBRASPE (Assertiva Certo/Errado):\n"
+            "   - O enunciado deve ser uma declaração/assertiva categórica para o candidato julgar como CERTO ou ERRADO.\n"
+            "   - Explore vocabulário clássico de prova, termos restritivos/ampliativos ('sempre', 'nunca', 'exclusivamente', 'independente de', 'salvo se'), inversões conceituais sutis e exceções.\n"
+            "5. GABARITO E FUNDAMENTAÇÃO PEDAGÓGICA:\n"
+            "   - 'gabarito': Estritamente 'CERTO' ou 'ERRADO'.\n"
+            "   - 'justificativa': Explicação técnica aprofundada demonstrando o porquê do gabarito (base legal, doutrinária ou jurisprudencial).\n"
+            "   - 'pegadinha_explicada': Análise minuciosa de onde reside a armadilha na assertiva e como a banca induz o candidato ao erro.\n"
+            "6. AUTOSSUFICIÊNCIA DO ENUNCIADO:\n"
+            "   - O candidato julga a questão isoladamente, sem acesso a textos externos.\n"
+            "   - É EXPRESSAMENTE PROIBIDO criar enunciados que digam 'no texto', 'segundo o autor', 'na linha X', a menos que um trecho de apoio esteja integralmente transcrito no próprio corpo do enunciado."
+        ),
+        (
+            "user",
+            "Disciplina/Matéria: {materia}\n"
+            "Tema do Tópico: {tema_topico}\n\n"
+            "--- CONHECIMENTO TEÓRICO ACUMULADO NO BANCO ---\n"
+            "{teoria_texto}\n\n"
+            "--- SACADAS E MNEMÔNICOS NO BANCO ---\n"
+            "{sacadas_texto}\n\n"
+            "--- PEGADINHAS JÁ MAPEADAS NO BANCO ---\n"
+            "{pegadinhas_texto}\n\n"
+            "--- QUESTÕES JÁ EXISTENTES (NÃO REPETIR) ---\n"
+            "{questoes_existentes_texto}\n\n"
+            "Gere agora questões inéditas de nível médio/alto cobrindo os pontos essenciais e pegadinhas deste tópico."
+        )
+    ])
 
-    if master_item:
-        materia = master_item.get("materia_nome") or materia
-        materia_id = master_item.get("materia_id") or materia_id
-        contexto_teorico.append(f"Tópico Central: {master_item.get('topico')} - {master_item.get('conteudo')}")
+    questoes_salvas: List[Dict[str, Any]] = []
+
+    for master_id in active_master_ids:
+        master_item = None
+        if master_id:
+            try:
+                master_item = db.get_item_by_id(master_id)
+            except Exception as e:
+                logger.warning(f"[cespe_agent] Não foi possível carregar item mestre {master_id}: {e}")
+                continue
+        
+        if not master_item:
+            continue
+
+        tema_topico = master_item.get('topico', tema_geral)
+        materia_topico = master_item.get("materia_nome") or materia_geral
+        materia_id_topico = master_item.get("materia_id") or materia_id_geral
+
+        logger.info(f"[cespe_agent] Processando Tópico ID {master_id}: '{tema_topico}'")
+
+        contexto_teorico: List[str] = [f"Tópico Central: {tema_topico} - {master_item.get('conteudo')}"]
+        questoes_existentes: List[str] = []
+        pegadinhas_existentes: List[str] = []
+        sacadas_existentes: List[str] = []
 
         # Fragmentos no JSONB
         for frag in master_item.get("fragmentos", []):
@@ -770,122 +973,69 @@ def cespe_agent_node(state: StudyState) -> Dict[str, Any]:
                 sacadas_existentes.append(f"- Mnemônico/Sacada: {conteudo}")
             else:
                 contexto_teorico.append(f"- Teoria: {filho.get('topico')} — {conteudo}")
-    else:
-        # Fallback para os itens extraídos do state se o banco não retornar o item mestre
-        for it in state.get("extracted_items", []):
-            cat = it.get("categoria", "")
-            if cat == "questao":
-                questoes_existentes.append(f"- {it.get('conteudo')}")
-            elif cat == "pegadinha":
-                pegadinhas_existentes.append(f"- {it.get('conteudo')}")
-            else:
-                contexto_teorico.append(f"- {it.get('topico')}: {it.get('conteudo')}")
 
-    # 2. Configura o LLM com o modelo GLM 5.3 Flash
-    llm = get_llm(model="glm-5.3-flash", temperature=0.2, max_tokens=4096)
-    structured_llm = llm.with_structured_output(ConjuntoQuestoesCespe)
+        teoria_str = "\n".join(contexto_teorico) if contexto_teorico else f"Tópico sobre {tema_topico}."
+        sacadas_str = "\n".join(sacadas_existentes) if sacadas_existentes else "Nenhuma sacada registrada."
+        pegadinhas_str = "\n".join(pegadinhas_existentes) if pegadinhas_existentes else "Nenhuma pegadinha registrada."
+        questoes_str = "\n".join(questoes_existentes) if questoes_existentes else "Nenhuma questão cadastrada previamente."
 
-    prompt = ChatPromptTemplate.from_messages([
-        (
-            "system",
-            "Você é um Examinador Sênior e Especialista de Bancas de Concurso Público, com foco estrito no padrão CESPE / CEBRASPE.\n\n"
-            "Sua missão é analisar o acervo pedagógico acumulado no banco de dados e gerar de 3 a 5 novas questões inéditas no formato CERTO ou ERRADO.\n\n"
-            "DIRETRIZES FUNDAMENTAIS DA BANCA CESPE/CEBRASPE:\n"
-            "1. INEDITISMO E NÃO-DUPLICAÇÃO: Verifique atentamente a lista de 'Questões Já Existentes'. É expressamente proibido formular questões redundantes ou repetições literais das já cadastradas.\n"
-            "2. FOCO EM PEGADINHAS E PONTOS NÃO ABORDADOS: Priorize conceitos, sacadas e principalmente armadilhas da lista de 'Pegadinhas Identificadas' que ainda não possuem questões associadas. Crie variações desafiadoras.\n"
-            "3. PADRÃO CESPE/CEBRASPE (Assertiva Certo/Errado):\n"
-            "   - O enunciado deve ser uma declaração/assertiva categórica para o candidato julgar como CERTO ou ERRADO.\n"
-            "   - Explore vocabulário clássico de prova, termos restritivos/ampliativos ('sempre', 'nunca', 'exclusivamente', 'independente de', 'salvo se'), inversões conceituais sutis e exceções da lei ou jurisprudência.\n"
-            "4. GABARITO E FUNDAMENTAÇÃO PEDAGÓGICA:\n"
-            "   - 'gabarito': Estritamente 'CERTO' ou 'ERRADO'.\n"
-            "   - 'justificativa': Explicação técnica aprofundada demonstrando o porquê do gabarito (base legal, doutrinária ou jurisprudencial).\n"
-            "   - 'pegadinha_explicada': Análise minuciosa de onde reside a armadilha na assertiva e como a banca induz o candidato ao erro."
-        ),
-        (
-            "user",
-            "Disciplina/Matéria: {materia}\n"
-            "Tema Central: {tema}\n\n"
-            "--- CONHECIMENTO TEÓRICO ACUMULADO NO BANCO ---\n"
-            "{teoria_texto}\n\n"
-            "--- SACADAS E MNEMÔNICOS NO BANCO ---\n"
-            "{sacadas_texto}\n\n"
-            "--- PEGADINHAS JÁ MAPEADAS NO BANCO ---\n"
-            "{pegadinhas_texto}\n\n"
-            "--- QUESTÕES JÁ EXISTENTES (NÃO REPETIR) ---\n"
-            "{questoes_existentes_texto}\n\n"
-            "Gere agora de 3 a 5 questões inéditas estilo CESPE/Cebraspe cobrindo os pontos essenciais e pegadinhas não exploradas."
-        )
-    ])
+        try:
+            prompt_val = prompt.invoke({
+                "materia": materia_topico,
+                "tema_topico": tema_topico,
+                "teoria_texto": teoria_str,
+                "sacadas_texto": sacadas_str,
+                "pegadinhas_texto": pegadinhas_str,
+                "questoes_existentes_texto": questoes_str
+            })
+            resultado: ConjuntoQuestoesCespe = structured_llm.invoke(prompt_val)
+            logger.info(f"[cespe_agent] {len(resultado.questoes)} questões formuladas para o Tópico ID {master_id}.")
 
-    teoria_str = "\n".join(contexto_teorico) if contexto_teorico else f"Tópico sobre {tema}."
-    sacadas_str = "\n".join(sacadas_existentes) if sacadas_existentes else "Nenhuma sacada registrada."
-    pegadinhas_str = "\n".join(pegadinhas_existentes) if pegadinhas_existentes else "Nenhuma pegadinha registrada."
-    questoes_str = "\n".join(questoes_existentes) if questoes_existentes else "Nenhuma questão cadastrada previamente."
+            # Persiste cada questão no PostgreSQL
+            for q in resultado.questoes:
+                detalhes = (
+                    f"**Gabarito:** [{q.gabarito}]\n\n"
+                    f"**Justificativa:**\n{q.justificativa}\n\n"
+                    f"**Pegadinha da Banca:**\n{q.pegadinha_explicada}"
+                )
+                item_questao = ItemEstudo(
+                    materia=materia_topico,
+                    topico=q.topico or tema_topico,
+                    categoria="questao",
+                    conteudo=q.enunciado,
+                    gabarito=q.gabarito,
+                    detalhes_resposta=detalhes,
+                    parent_id=master_id,
+                    materia_id=materia_id_topico
+                )
+                texto_vetor = f"Tópico: {item_questao.topico} - {item_questao.conteudo}"
+                vetor = embedding_manager.embed_query(texto_vetor)
 
-    questoes_salvas: List[Dict[str, Any]] = []
-    try:
-        prompt_val = prompt.invoke({
-            "materia": materia,
-            "tema": tema,
-            "teoria_texto": teoria_str,
-            "sacadas_texto": sacadas_str,
-            "pegadinhas_texto": pegadinhas_str,
-            "questoes_existentes_texto": questoes_str
-        })
-        resultado: ConjuntoQuestoesCespe = structured_llm.invoke(prompt_val)
-        logger.info(f"[cespe_agent] {len(resultado.questoes)} questões CESPE formuladas com sucesso pelo GLM 5.3 Flash.")
-
-        # 3. Persiste cada questão no PostgreSQL como item de estudo (categoria='questao')
-        for q in resultado.questoes:
-            detalhes = (
-                f"**Gabarito:** [{q.gabarito}]\n\n"
-                f"**Justificativa:**\n{q.justificativa}\n\n"
-                f"**Pegadinha da Banca:**\n{q.pegadinha_explicada}"
-            )
-            item_questao = ItemEstudo(
-                materia=materia,
-                topico=q.topico or tema,
-                categoria="questao",
-                conteudo=q.enunciado,
-                detalhes_resposta=detalhes,
-                parent_id=master_id,
-                materia_id=materia_id
-            )
-            texto_vetor = f"Tópico: {item_questao.topico} - {item_questao.conteudo}"
-            vetor = embedding_manager.embed_query(texto_vetor)
-
-            if master_id:
                 db.append_fragment_to_item(
                     item_id=master_id,
                     topico=item_questao.topico,
                     categoria="questao",
                     conteudo_incremental=item_questao.conteudo,
+                    gabarito=item_questao.gabarito,
                     detalhes_resposta=detalhes,
                     justificativa=f"Questão CESPE: {q.pegadinha_explicada}",
                     link_do_video=link,
                     embedding=vetor,
-                    materia_id=materia_id
-                )
-            else:
-                db.insert_new_item(
-                    item=item_questao,
-                    embedding=vetor,
-                    link_do_video=link,
-                    parent_id=None,
-                    materia_id=materia_id
+                    materia_id=materia_id_topico
                 )
 
-            questoes_salvas.append({
-                "topico": q.topico,
-                "enunciado": q.enunciado,
-                "gabarito": q.gabarito,
-                "justificativa": q.justificativa,
-                "pegadinha_explicada": q.pegadinha_explicada
-            })
+                questoes_salvas.append({
+                    "topico": q.topico,
+                    "enunciado": q.enunciado,
+                    "gabarito": q.gabarito,
+                    "justificativa": q.justificativa,
+                    "pegadinha_explicada": q.pegadinha_explicada
+                })
 
-    except Exception as e:
-        logger.error(f"[cespe_agent] Erro na geração ou persistência de questões CESPE: {e}")
+        except Exception as e:
+            logger.error(f"[cespe_agent] Erro na geração/persistência de questões para o Tópico ID {master_id}: {e}")
 
+    logger.info(f"[cespe_agent] Total de {len(questoes_salvas)} questões geradas e salvas em {len(active_master_ids)} tópicos.")
     return {
         "cespe_questions": questoes_salvas
     }
@@ -894,13 +1044,13 @@ def cespe_agent_node(state: StudyState) -> Dict[str, Any]:
 def revisao_scheduler_node(state: StudyState) -> Dict[str, Any]:
     """
     NÓ AGENDADOR DE REVISÕES ESPAÇADAS (Ebbinghaus):
-    Executa o agendamento da primeira revisão (Etapa 0) para todo item novo cadastrado na base
-    (incluindo teorias, fragmentos e as novas questões CESPE geradas), disponibilizando-os para o Telegram.
+    Executa o agendamento da primeira revisão (Etapa 0) exclusivamente para questões (categoria='questao'),
+    garantindo que teorias fiquem disponíveis apenas sob demanda.
     """
-    logger.info("[revisao_scheduler] Agendando primeiras revisões para os novos itens da aula...")
+    logger.info("[revisao_scheduler] Agendando primeiras revisões exclusivamente para questões cadastradas...")
     try:
-        res = revisoes.backfill_revisoes(base_date=revisoes.agora_local())
-        logger.info(f"[revisao_scheduler] Agendamento concluído: {res.get('revisoes_criadas', 0)} novas revisões criadas.")
+        res = revisoes.backfill_revisoes(categorias=["questao"], base_date=revisoes.agora_local())
+        logger.info(f"[revisao_scheduler] Agendamento concluído: {res.get('revisoes_criadas', 0)} novas revisões de questões criadas.")
         return {"revisoes_agendadas": res}
     except Exception as e:
         logger.error(f"[revisao_scheduler] Falha ao agendar revisões: {e}")

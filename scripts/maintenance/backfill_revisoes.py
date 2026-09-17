@@ -10,7 +10,11 @@ Uso:
 """
 import argparse
 import json
+import os
 import sys
+
+# Garante raiz do projeto no path
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
 
 from src import db
 from src import revisoes

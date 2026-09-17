@@ -44,19 +44,19 @@ def test_reconciliation_agent_decision_types(mock_get_llm):
     mock_chain.invoke.return_value = RelatorioReconciliacao(
         decisoes=[
             DecisaoIntegracao(
-                item=item1,
+                indice_candidato=0,
                 acao="CRIAR_NOVO",
                 justificativa="Conceito novo sobre veracidade de fatos."
             ),
             DecisaoIntegracao(
-                item=item2,
+                indice_candidato=1,
                 acao="ADICIONAR_FRAGMENTO",
                 item_id_referencia=10,
                 conteudo_incremental="Multas não têm autoexecutoriedade",
                 justificativa="Complementa o tópico de autoexecutoriedade existente no banco."
             ),
             DecisaoIntegracao(
-                item=item3,
+                indice_candidato=2,
                 acao="DESCARTAR",
                 justificativa="Idêntico à teoria já presente no ID 10."
             )
@@ -130,6 +130,7 @@ def test_db_writer_node_upsert(mock_embed, mock_save_vid, mock_append, mock_inse
         topico="Tópico Existente",
         categoria="pegadinha",
         conteudo_incremental="Pegadinha detalhada.",
+        gabarito=None,
         detalhes_resposta=None,
         justificativa="Enriquece ID 15.",
         link_do_video="https://youtube.com/watch?v=aula_teste",

@@ -37,7 +37,7 @@ class Settings(BaseSettings):
     MIN_SIMILARITY_THRESHOLD: float = 0.50
 
     # Revisão Espaçada (Curva do Esquecimento - Ebbinghaus)
-    REVISAO_INTERVALOS_DIAS: str = "1,2,4,7,15,30,60,120"
+    REVISAO_INTERVALOS_DIAS: str = "1,7,15,30"
     REVISAO_HORA_AGENDAMENTO: int = 8
     REVISAO_TZ_OFFSET_HORAS: int = -3
 

@@ -14,7 +14,7 @@ from src.models import RespostaRevisaoRequest, RespostaRevisaoLoteRequest
 def test_intervalos_escada_padrao(monkeypatch):
     monkeypatch.setattr(revisoes.settings, "REVISAO_INTERVALOS_DIAS", "")
     ladder = revisoes.intervalos()
-    assert ladder == [1, 7, 30]
+    assert ladder == [1, 7, 15, 30]
     assert ladder == sorted(ladder)
 
 
@@ -120,8 +120,8 @@ def test_ciclo_completo_no_banco():
     try:
         with conn.cursor() as cur:
             cur.execute("""
-                INSERT INTO itens_estudo (topico, categoria, conteudo, fragmentos, criado_em, data_ultima_revisao, qtd_revisoes)
-                VALUES ('TESTE_REVISAO_UNIT', 'questao', 'Pergunta de teste?', '[]'::jsonb, NOW(), NOW(), 0)
+                INSERT INTO itens_estudo (topico, categoria, conteudo, detalhes_resposta, fragmentos, criado_em, data_ultima_revisao, qtd_revisoes)
+                VALUES ('TESTE_REVISAO_UNIT', 'questao', 'Pergunta de teste válida?', 'Gabarito oficial de teste', '[]'::jsonb, NOW(), NOW(), 0)
                 RETURNING id;
             """)
             item_id = cur.fetchone()[0]
@@ -156,9 +156,67 @@ def test_ciclo_completo_no_banco():
 
 
 @pytestmark_db
+def test_validacao_rejeita_teoria_e_sem_gabarito():
+    """Valida que itens de teoria ou sem resposta não podem ser agendados para revisão."""
+    conn = revisoes.db.get_db_connection()
+    try:
+        with conn.cursor() as cur:
+            # 1. Item do tipo teoria
+            cur.execute("""
+                INSERT INTO itens_estudo (topico, categoria, conteudo, detalhes_resposta, criado_em, data_ultima_revisao)
+                VALUES ('TESTE_TEORIA', 'teoria', 'Explicação conceitual teórica...', 'Nota teórica', NOW(), NOW())
+                RETURNING id;
+            """)
+            teoria_id = cur.fetchone()[0]
+
+            # 2. Questão sem gabarito
+            cur.execute("""
+                INSERT INTO itens_estudo (topico, categoria, conteudo, detalhes_resposta, criado_em, data_ultima_revisao)
+                VALUES ('TESTE_QUESTAO_SEM_RESPOSTA', 'questao', 'Pergunta sem resposta?', NULL, NOW(), NOW())
+                RETURNING id;
+            """)
+            invalida_id = cur.fetchone()[0]
+            conn.commit()
+    finally:
+        conn.close()
+
+    try:
+        # Teoria deve ser recusada
+        valido_t, motivo_t = revisoes.validar_item_para_revisao(teoria_id)
+        assert valido_t is False
+        assert "exclusivas para 'questao'" in motivo_t
+        assert revisoes.agendar_primeira_revisao(teoria_id) is None
+
+        # Questão sem gabarito deve ser recusada
+        valido_q, motivo_q = revisoes.validar_item_para_revisao(invalida_id)
+        assert valido_q is False
+        assert "não possui gabarito" in motivo_q
+        assert revisoes.agendar_primeira_revisao(invalida_id) is None
+    finally:
+        conn = revisoes.db.get_db_connection()
+        try:
+            with conn.cursor() as cur:
+                cur.execute("DELETE FROM itens_estudo WHERE id IN (%s, %s);", (teoria_id, invalida_id))
+                conn.commit()
+        finally:
+            conn.close()
+
+
+@pytestmark_db
+def test_get_related_study_items():
+    """Valida busca de teoria/sacada/pegadinha relacionadas a um item."""
+    rel = revisoes.db.get_related_study_items(7)
+    if rel:
+        assert rel["item_id"] == 7
+        assert "teoria" in rel
+        assert "sacada" in rel
+        assert "pegadinha" in rel
+
+
+@pytestmark_db
 def test_backfill_cria_revisoes_para_base():
-    resultado = revisoes.backfill_revisoes()
+    resultado = revisoes.backfill_revisoes(categorias=["questao"])
     assert "revisoes_criadas" in resultado
-    stats = revisoes.estatisticas()
+    stats = revisoes.estatisticas(categoria="questao")
     assert stats["itens_cobertos"] >= 1
     assert isinstance(stats["escada_dias"], list)

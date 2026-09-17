@@ -4,9 +4,6 @@ import logging
 from contextlib import asynccontextmanager
 from typing import Optional, List, Dict, Any
 from fastapi import FastAPI, Query, HTTPException, Request
-from fastapi.responses import HTMLResponse
-from fastapi.staticfiles import StaticFiles
-from fastapi.templating import Jinja2Templates
 from sse_starlette.sse import EventSourceResponse
 
 from src.config import settings
@@ -63,29 +60,20 @@ app = FastAPI(
     lifespan=lifespan
 )
 
-# Static files & Templates
-import os
-BASE_DIR = os.path.dirname(os.path.abspath(__file__))
-STATIC_DIR = os.path.join(BASE_DIR, "static")
-TEMPLATES_DIR = os.path.join(BASE_DIR, "templates")
-
-if not os.path.exists(STATIC_DIR):
-    os.makedirs(STATIC_DIR, exist_ok=True)
-if not os.path.exists(TEMPLATES_DIR):
-    os.makedirs(TEMPLATES_DIR, exist_ok=True)
-
-app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
-templates = Jinja2Templates(directory=TEMPLATES_DIR)
-
 
 # =====================================================================
 # ROTAS PRINCIPAIS
 # =====================================================================
 
-@app.get("/", response_class=HTMLResponse)
-async def index_view(request: Request):
-    """Página principal do Dashboard do Curador RAG."""
-    return templates.TemplateResponse(request=request, name="index.html")
+@app.get("/")
+async def root_view():
+    """Endpoint raiz da API do Study RAG Agent."""
+    return {
+        "name": "Study RAG Agent API",
+        "version": "1.0.0",
+        "status": "online",
+        "docs": "/docs"
+    }
 
 
 @app.get("/health")
@@ -167,6 +155,15 @@ async def get_item_endpoint(item_id: int):
     if not item:
         raise HTTPException(status_code=404, detail="Item de estudo não encontrado.")
     return item
+
+
+@app.get("/api/v1/items/{item_id}/relacionados")
+async def get_item_relacionados_endpoint(item_id: int):
+    """Retorna itens conceituais (teoria, sacada, pegadinha) vinculados a um item de estudo."""
+    rel = db.get_related_study_items(item_id)
+    if not rel:
+        raise HTTPException(status_code=404, detail="Item de estudo não encontrado.")
+    return rel
 
 
 @app.get("/api/v1/videos", response_model=List[ProcessedVideoSummary])
@@ -356,10 +353,12 @@ async def process_video_stream_endpoint(
 # =====================================================================
 
 @app.get("/api/v1/revisoes/stats")
-async def revisoes_stats_endpoint():
+async def revisoes_stats_endpoint(
+    categoria: Optional[str] = Query("questao", description="Filtro por categoria (padrão: questao)")
+):
     """Resumo do ciclo de revisões: devidas hoje, atrasadas, próximos 7 dias e cobertura."""
     try:
-        return revisoes.estatisticas()
+        return revisoes.estatisticas(categoria=categoria)
     except Exception as e:
         logger.error(f"Erro ao obter estatísticas de revisão: {e}")
         raise HTTPException(status_code=500, detail=str(e))
@@ -369,7 +368,7 @@ async def revisoes_stats_endpoint():
 async def revisoes_pendentes_endpoint(
     dias: int = Query(0, ge=0, le=365, description="Janela em dias a partir de hoje (0 = só hoje + atrasadas)"),
     materia_id: Optional[int] = Query(None, description="Filtro por matéria"),
-    categoria: Optional[str] = Query(None, description="Filtro por categoria (teoria|sacada|pegadinha|questao)"),
+    categoria: Optional[str] = Query("questao", description="Filtro por categoria (padrão: questao)"),
     limite: int = Query(50, ge=1, le=500)
 ):
     """Lista as revisões em aberto (pendentes/adiadas) que vencem na janela informada."""
@@ -397,7 +396,7 @@ async def revisoes_plano_endpoint(
 
 @app.post("/api/v1/revisoes/backfill")
 async def revisoes_backfill_endpoint(
-    categoria: Optional[str] = Query(None, description="Opcional: gerar só para uma categoria"),
+    categoria: Optional[str] = Query("questao", description="Opcional: gerar só para uma categoria (padrão: questao)"),
     base_hoje: bool = Query(False, description="Se true, agenda a partir de hoje em vez da data do item")
 ):
     """Gera a primeira revisão para todos os itens que ainda não têm ciclo aberto."""

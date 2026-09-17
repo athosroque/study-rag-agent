@@ -41,3 +41,6 @@ study_rag_pgadmin_data/
 # Logs
 logs/
 *.log
+
+# Scripts locais
+debug_keys.py

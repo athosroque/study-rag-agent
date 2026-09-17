@@ -12,9 +12,12 @@ class ItemEstudo(BaseModel):
     categoria: Literal["teoria", "sacada", "pegadinha", "questao"] = Field(
         description="Categoria do item: 'teoria', 'sacada', 'pegadinha' ou 'questao'"
     )
-    conteudo: str = Field(description="O conceito, pergunta, sacada ou pegadinha")
+    conteudo: str = Field(description="O conceito, assertiva/enunciado da questão (estritamente SEM o gabarito), sacada ou pegadinha")
+    gabarito: Optional[str] = Field(
+        None, description="Gabarito oficial ou resposta direta da questão (ex: 'CERTO', 'ERRADO', 'Alternativa B', ou resposta objetiva concisa). Obrigatório para categoria 'questao'."
+    )
     detalhes_resposta: Optional[str] = Field(
-        None, description="Resposta da questão ou explicação pedagógica adicional"
+        None, description="Resolução comentada, fundamentação técnica ou notas pedagógicas adicionais"
     )
     parent_id: Optional[int] = Field(
         None, description="ID do tópico mestre ao qual este item está vinculado"
@@ -41,7 +44,9 @@ class ConjuntoItemsExtraidos(BaseModel):
 
 
 class DecisaoIntegracao(BaseModel):
-    item: ItemEstudo
+    indice_candidato: int = Field(
+        ..., description="Índice numérico do item candidato avaliado na lista (ex: 0, 1, 2)"
+    )
     acao: Literal["CRIAR_NOVO", "ADICIONAR_FRAGMENTO", "DESCARTAR"] = Field(
         description=(
             "Ação de integração curada: "
@@ -87,6 +92,7 @@ class ItemEstudoCompleto(BaseModel):
     topico: str
     categoria: str
     conteudo: str
+    gabarito: Optional[str] = None
     detalhes_resposta: Optional[str] = None
     fragmentos: List[Dict[str, Any]] = Field(default_factory=list)
     parent_id: Optional[int] = None
@@ -149,6 +155,7 @@ class RevisaoOut(BaseModel):
     atrasada_dias: int = 0
     vence_hoje: bool = False
     conteudo: Optional[str] = None
+    gabarito: Optional[str] = None
     detalhes_resposta: Optional[str] = None
 
 
@@ -193,6 +200,7 @@ class StudyState(TypedDict, total=False):
     relevant_existing_items: List[Dict[str, Any]]
     reconciliation_decisions: List[Dict[str, Any]]
     master_topic_id: Optional[int]
+    active_master_ids: List[int]
     db_status: str
     summary_stats: Dict[str, int]
     cespe_questions: List[Dict[str, Any]]

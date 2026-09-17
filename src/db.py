@@ -149,6 +149,7 @@ def init_db():
                     topico TEXT NOT NULL,
                     categoria TEXT NOT NULL,
                     conteudo TEXT NOT NULL,
+                    gabarito TEXT,
                     detalhes_resposta TEXT,
                     fragmentos JSONB DEFAULT '[]'::jsonb,
                     criado_em TIMESTAMP NOT NULL,
@@ -177,6 +178,12 @@ def init_db():
             cur.execute("ALTER TABLE videos_processados ADD COLUMN IF NOT EXISTS transcricao_completa TEXT;")
             cur.execute("ALTER TABLE itens_estudo ADD COLUMN IF NOT EXISTS parent_id INTEGER REFERENCES itens_estudo(id) ON DELETE CASCADE;")
             cur.execute("ALTER TABLE itens_estudo ADD COLUMN IF NOT EXISTS materia_id INTEGER REFERENCES materias(id) ON DELETE SET NULL;")
+            cur.execute("ALTER TABLE itens_estudo ADD COLUMN IF NOT EXISTS gabarito TEXT;")
+            cur.execute("""
+                UPDATE itens_estudo 
+                SET gabarito = detalhes_resposta 
+                WHERE categoria = 'questao' AND gabarito IS NULL AND detalhes_resposta IS NOT NULL;
+            """)
             cur.execute("CREATE INDEX IF NOT EXISTS idx_itens_estudo_parent_id ON itens_estudo(parent_id);")
             cur.execute("CREATE INDEX IF NOT EXISTS idx_itens_estudo_materia_id ON itens_estudo(materia_id);")
 
@@ -397,7 +404,7 @@ def search_similar_items(
             
             query = f"""
                 SELECT 
-                    i.id, i.topico, i.categoria, i.conteudo, i.detalhes_resposta, 
+                    i.id, i.topico, i.categoria, i.conteudo, i.gabarito, i.detalhes_resposta, 
                     i.fragmentos, i.criado_em, i.data_ultima_revisao, i.qtd_revisoes, 
                     i.link_do_video, i.parent_id, i.materia_id, m.nome AS materia_nome,
                     (i.embedding <=> %s::vector) AS distance
@@ -451,7 +458,7 @@ def search_master_topic(
 
             query = f"""
                 SELECT 
-                    i.id, i.topico, i.categoria, i.conteudo, i.detalhes_resposta, 
+                    i.id, i.topico, i.categoria, i.conteudo, i.gabarito, i.detalhes_resposta, 
                     i.fragmentos, i.criado_em, i.data_ultima_revisao, i.qtd_revisoes, 
                     i.link_do_video, i.parent_id, i.materia_id, m.nome AS materia_nome,
                     (i.embedding <=> %s::vector) AS distance
@@ -485,7 +492,7 @@ def search_master_topic(
 
             # Carrega filhos vinculados
             cur.execute("""
-                SELECT i.id, i.topico, i.categoria, i.conteudo, i.detalhes_resposta, i.criado_em, i.link_do_video, i.parent_id, i.materia_id, m.nome AS materia_nome
+                SELECT i.id, i.topico, i.categoria, i.conteudo, i.gabarito, i.detalhes_resposta, i.criado_em, i.link_do_video, i.parent_id, i.materia_id, m.nome AS materia_nome
                 FROM itens_estudo i
                 LEFT JOIN materias m ON i.materia_id = m.id
                 WHERE i.parent_id = %s
@@ -529,13 +536,14 @@ def insert_new_item(
             vector_json = json.dumps(embedding)
             cur.execute("""
                 INSERT INTO itens_estudo 
-                (topico, categoria, conteudo, detalhes_resposta, fragmentos, criado_em, data_ultima_revisao, qtd_revisoes, link_do_video, parent_id, materia_id, embedding)
-                VALUES (%s, %s, %s, %s, '[]'::jsonb, %s, %s, 1, %s, %s, %s, %s::vector)
+                (topico, categoria, conteudo, gabarito, detalhes_resposta, fragmentos, criado_em, data_ultima_revisao, qtd_revisoes, link_do_video, parent_id, materia_id, embedding)
+                VALUES (%s, %s, %s, %s, %s, '[]'::jsonb, %s, %s, 1, %s, %s, %s, %s::vector)
                 RETURNING id;
             """, (
                 item.topico,
                 item.categoria,
                 item.conteudo,
+                getattr(item, 'gabarito', None),
                 item.detalhes_resposta,
                 now,
                 now,
@@ -558,6 +566,7 @@ def append_fragment_to_item(
     justificativa: str,
     link_do_video: Optional[str] = None,
     topico: Optional[str] = None,
+    gabarito: Optional[str] = None,
     detalhes_resposta: Optional[str] = None,
     embedding: Optional[List[float]] = None,
     materia_id: Optional[int] = None
@@ -572,6 +581,7 @@ def append_fragment_to_item(
         "topico": topico,
         "categoria": categoria,
         "conteudo_incremental": conteudo_incremental,
+        "gabarito": gabarito,
         "detalhes_resposta": detalhes_resposta,
         "justificativa": justificativa,
         "adicionado_em": now.isoformat(),
@@ -612,12 +622,13 @@ def append_fragment_to_item(
                 vector_json = json.dumps(embedding) if embedding is not None else None
                 cur.execute("""
                     INSERT INTO itens_estudo 
-                    (topico, categoria, conteudo, detalhes_resposta, fragmentos, criado_em, data_ultima_revisao, qtd_revisoes, link_do_video, parent_id, materia_id, embedding)
-                    VALUES (%s, %s, %s, %s, '[]'::jsonb, %s, %s, 1, %s, %s, %s, %s::vector);
+                    (topico, categoria, conteudo, gabarito, detalhes_resposta, fragmentos, criado_em, data_ultima_revisao, qtd_revisoes, link_do_video, parent_id, materia_id, embedding)
+                    VALUES (%s, %s, %s, %s, %s, '[]'::jsonb, %s, %s, 1, %s, %s, %s, %s::vector);
                 """, (
                     child_topico,
                     categoria,
                     conteudo_incremental,
+                    gabarito,
                     detalhes_resposta,
                     now,
                     now,
@@ -647,7 +658,7 @@ def list_items(
         with conn.cursor(cursor_factory=RealDictCursor) as cur:
             query = """
                 SELECT 
-                    i.id, i.topico, i.categoria, i.conteudo, i.detalhes_resposta,
+                    i.id, i.topico, i.categoria, i.conteudo, i.gabarito, i.detalhes_resposta,
                     i.fragmentos, i.parent_id, i.materia_id, m.nome AS materia_nome,
                     i.criado_em, i.data_ultima_revisao, i.qtd_revisoes, i.link_do_video
                 FROM itens_estudo i
@@ -686,7 +697,7 @@ def list_items(
             if master_ids:
                 cur.execute("""
                     SELECT 
-                        i.id, i.topico, i.categoria, i.conteudo, i.detalhes_resposta, 
+                        i.id, i.topico, i.categoria, i.conteudo, i.gabarito, i.detalhes_resposta, 
                         i.criado_em, i.link_do_video, i.parent_id, i.materia_id, m.nome AS materia_nome
                     FROM itens_estudo i
                     LEFT JOIN materias m ON i.materia_id = m.id
@@ -726,7 +737,7 @@ def get_item_by_id(item_id: int) -> Optional[Dict[str, Any]]:
         with conn.cursor(cursor_factory=RealDictCursor) as cur:
             cur.execute("""
                 SELECT 
-                    i.id, i.topico, i.categoria, i.conteudo, i.detalhes_resposta,
+                    i.id, i.topico, i.categoria, i.conteudo, i.gabarito, i.detalhes_resposta,
                     i.fragmentos, i.parent_id, i.materia_id, m.nome AS materia_nome,
                     i.criado_em, i.data_ultima_revisao, i.qtd_revisoes, i.link_do_video
                 FROM itens_estudo i
@@ -745,7 +756,7 @@ def get_item_by_id(item_id: int) -> Optional[Dict[str, Any]]:
             # Busca filhos vinculados via parent_id
             cur.execute("""
                 SELECT 
-                    i.id, i.topico, i.categoria, i.conteudo, i.detalhes_resposta,
+                    i.id, i.topico, i.categoria, i.conteudo, i.gabarito, i.detalhes_resposta,
                     i.criado_em, i.link_do_video, i.parent_id, i.materia_id, m.nome AS materia_nome
                 FROM itens_estudo i
                 LEFT JOIN materias m ON i.materia_id = m.id
@@ -811,3 +822,125 @@ def get_stats() -> Dict[str, Any]:
             }
     finally:
         conn.close()
+
+
+def get_related_study_items(item_id: int) -> Optional[Dict[str, Any]]:
+    """
+    Retorna os itens de apoio conceitual (teoria, sacada, pegadinha) relacionados a uma questão/item.
+    Combina correspondência de tópico, coerência hierárquica (parent_id) e busca semântica vetorial (pgvector)
+    estritamente isolada por matéria (materia_id), evitando heranças indevidas de temas não correlatos.
+    """
+    conn = get_db_connection()
+    try:
+        with conn.cursor(cursor_factory=RealDictCursor) as cur:
+            # 1. Carrega o item alvo
+            cur.execute("""
+                SELECT i.id, i.topico, i.categoria, i.conteudo, i.parent_id, i.materia_id,
+                       m.nome AS materia_nome, (i.embedding IS NOT NULL) AS tem_embedding
+                FROM itens_estudo i
+                LEFT JOIN materias m ON i.materia_id = m.id
+                WHERE i.id = %s;
+            """, (item_id,))
+            target = cur.fetchone()
+            if not target:
+                return None
+
+            target = dict(target)
+            topico = target["topico"]
+            parent_id = target.get("parent_id")
+            materia_id = target.get("materia_id")
+            master_id = parent_id if parent_id is not None else item_id
+            tem_embedding = bool(target.get("tem_embedding"))
+
+            relacionados: Dict[str, Optional[Dict[str, Any]]] = {
+                "teoria": None,
+                "sacada": None,
+                "pegadinha": None,
+            }
+
+            # 2. Busca o melhor candidato para cada categoria conceitual via pgvector com particionamento por matéria
+            for cat in ("teoria", "sacada", "pegadinha"):
+                if tem_embedding:
+                    cur.execute("""
+                        SELECT i.id, i.topico, i.categoria, i.conteudo, i.gabarito, i.detalhes_resposta,
+                               i.parent_id, i.materia_id, m.nome AS materia_nome,
+                               (1 - (i.embedding <=> t.embedding)) AS sim,
+                               CASE WHEN i.topico = %s THEN 1 ELSE 0 END AS same_topic,
+                               CASE WHEN (i.id = %s OR i.parent_id = %s) THEN 1 ELSE 0 END AS same_hierarchy
+                        FROM itens_estudo i
+                        CROSS JOIN (SELECT embedding FROM itens_estudo WHERE id = %s) t
+                        LEFT JOIN materias m ON i.materia_id = m.id
+                        WHERE i.id != %s
+                          AND i.categoria = %s
+                          AND (%s::int IS NULL OR i.materia_id = %s::int)
+                          AND i.embedding IS NOT NULL
+                          AND t.embedding IS NOT NULL
+                        ORDER BY
+                          same_topic DESC,
+                          same_hierarchy DESC,
+                          sim DESC
+                        LIMIT 1;
+                    """, (topico, master_id, master_id, item_id, item_id, cat, materia_id, materia_id))
+                    row = cur.fetchone()
+                    if row:
+                        sim = float(row.get("sim") or 0.0)
+                        # Aceita se for o mesmo tópico, mesma hierarquia com afinidade real (>= 0.70) ou vetorial forte (>= 0.70)
+                        if row["same_topic"] == 1 or (row["same_hierarchy"] == 1 and sim >= 0.70) or sim >= 0.70:
+                            metodo = "topico_exato" if row["same_topic"] == 1 else ("hierarquia_semantica" if row["same_hierarchy"] == 1 else "vetorial")
+                            relacionados[cat] = {
+                                "id": row["id"],
+                                "topico": row["topico"],
+                                "categoria": row["categoria"],
+                                "conteudo": row["conteudo"],
+                                "gabarito": row.get("gabarito"),
+                                "detalhes_resposta": row.get("detalhes_resposta"),
+                                "materia_nome": row.get("materia_nome"),
+                                "sim": round(sim, 4),
+                                "metodo": metodo,
+                            }
+
+                # 3. Fallback hierárquico / léxico caso ainda vazio (ex: itens legados sem embeddings)
+                if relacionados[cat] is None:
+                    cur.execute("""
+                        SELECT i.id, i.topico, i.categoria, i.conteudo, i.gabarito, i.detalhes_resposta,
+                               i.parent_id, i.materia_id, m.nome AS materia_nome
+                        FROM itens_estudo i
+                        LEFT JOIN materias m ON i.materia_id = m.id
+                        WHERE i.id != %s
+                          AND i.categoria = %s
+                          AND (%s::int IS NULL OR i.materia_id = %s::int)
+                          AND (i.topico = %s OR i.id = %s OR i.parent_id = %s)
+                        ORDER BY
+                          CASE
+                            WHEN i.topico = %s THEN 1
+                            WHEN (i.id = %s OR i.parent_id = %s) THEN 2
+                            ELSE 3
+                          END,
+                          i.id ASC
+                        LIMIT 1;
+                    """, (item_id, cat, materia_id, materia_id, topico, master_id, master_id, topico, master_id, master_id))
+                    h_row = cur.fetchone()
+                    if h_row:
+                        relacionados[cat] = {
+                            "id": h_row["id"],
+                            "topico": h_row["topico"],
+                            "categoria": h_row["categoria"],
+                            "conteudo": h_row["conteudo"],
+                            "gabarito": h_row.get("gabarito"),
+                            "detalhes_resposta": h_row.get("detalhes_resposta"),
+                            "materia_nome": h_row.get("materia_nome"),
+                            "metodo": "fallback_lexico",
+                        }
+
+            return {
+                "item_id": item_id,
+                "topico": target["topico"],
+                "materia_nome": target.get("materia_nome"),
+                "teoria": relacionados["teoria"],
+                "sacada": relacionados["sacada"],
+                "pegadinha": relacionados["pegadinha"],
+            }
+    finally:
+        conn.close()
+
+

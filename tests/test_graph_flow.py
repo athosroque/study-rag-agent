@@ -338,6 +338,7 @@ def test_cespe_agent_node_success():
         call_kwargs = mock_append.call_args.kwargs
         assert call_kwargs["item_id"] == 10
         assert call_kwargs["categoria"] == "questao"
+        assert call_kwargs["gabarito"] == "ERRADO"
         assert "Gabarito" in call_kwargs["detalhes_resposta"]
 
 

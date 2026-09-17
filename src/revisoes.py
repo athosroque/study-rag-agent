@@ -3,7 +3,7 @@ Motor de Revisão Espaçada baseado na Curva do Esquecimento de Hermann Ebbingha
 
 Regras do ciclo:
   - Cada item de estudo (teoria/sacada/pegadinha/questao) entra na escada de intervalos.
-  - Escada padrão (dias): 1, 2, 4, 7, 15, 30, 60, 120 (configurável via REVISAO_INTERVALOS_DIAS).
+  - Escada padrão (dias): 1, 7, 15, 30 (configurável via REVISAO_INTERVALOS_DIAS).
   - Autoavaliação do desempenho (0 a 3):
       0 = não lembrei / errei  -> volta para a etapa 0 (recomeça o ciclo)
       1 = lembrei com dificuldade -> repete a mesma etapa (intervalo não avança)
@@ -13,6 +13,7 @@ Regras do ciclo:
   - Ao esgotar a escada, o ciclo é considerado concluído.
 """
 import logging
+import re
 from datetime import datetime, timedelta, time as dtime
 from typing import List, Dict, Any, Optional, Sequence
 
@@ -23,7 +24,7 @@ from src import db
 
 logger = logging.getLogger(__name__)
 
-DEFAULT_INTERVALOS: List[int] = [1, 7, 30]
+DEFAULT_INTERVALOS: List[int] = [1, 7, 15, 30]
 
 STATUS_PENDENTE = "pendente"
 STATUS_FEITA = "feita"
@@ -67,15 +68,128 @@ def _iso(value: Any) -> Optional[str]:
 # AGENDAMENTO
 # =====================================================================
 
+def verificar_autossuficiencia_enunciado(conteudo: Optional[str]) -> tuple[bool, Optional[str]]:
+    """
+    Verifica se o enunciado de uma questão é autossuficiente para resolução isolada no bot/app.
+    Identifica se a questão faz referências cegas a textos, linhas ou parágrafos externos
+    sem fornecer a oração, frase ou trecho delimitado correspondente.
+    Retorna (valido: bool, motivo: Optional[str]).
+    """
+    if not conteudo:
+        return False, "Enunciado vazio."
+
+    texto = conteudo.strip()
+    texto_lower = texto.lower()
+
+    # Padrões que indicam dependência textual externa
+    padroes_referencia_externa = [
+        (r'\b(?:no|do|deste|desse|ao)\s+texto\b', "referência a 'texto'"),
+        (r'\b(?:nas?|às?)\s+linhas?\s+\d+\b', "referência a número de linha"),
+        (r'\b(?:no|do)\s+(?:primeiro|segundo|terceiro|último|ultimo)\s+parágrafo\b', "referência a parágrafo externo"),
+        (r'\b(?:no|do)\s+último\s+período\b', "referência a 'último período'"),
+        (r'\bsegundo\s+o\s+autor\b', "referência a 'segundo o autor'"),
+    ]
+
+    tem_referencia = False
+    motivo_detectado = ""
+    for padrao, desc in padroes_referencia_externa:
+        if re.search(padrao, texto_lower):
+            tem_referencia = True
+            motivo_detectado = desc
+            break
+
+    if not tem_referencia:
+        return True, None
+
+    # Se há referência textual, verificamos se há um trecho/oração suporte substantivo fornecido
+    # Extrai segmentos delimitados por aspas pareadas sem pontes indevidas
+    segs: List[str] = []
+    parts_double = texto.split('"')
+    if len(parts_double) >= 3:
+        for i in range(1, len(parts_double), 2):
+            segs.append(parts_double[i])
+    parts_single = texto.split("'")
+    if len(parts_single) >= 3:
+        for i in range(1, len(parts_single), 2):
+            segs.append(parts_single[i])
+    segs.extend(re.findall(r'“([^”]+)”', texto))
+    segs.extend(re.findall(r'«([^»]+)»', texto))
+
+    for s in segs:
+        s_clean = s.strip()
+        # Trecho substantivo com extensão mínima e contendo pelo menos 3 palavras
+        if len(s_clean) >= 15 and len(s_clean.split()) >= 3:
+            return True, None
+
+    # Também checa se o enunciado introduz explicitamente um trecho/oração suporte com instrução e comprimento
+    # Ex: 'Considere a seguinte frase: ...' ou 'Julgue o item a partir da oração: ...'
+    if re.search(r'(?:considere|analise|observe|leia)\s+(?:a\s+frase|a\s+oração|o\s+trecho|o\s+seguinte)', texto_lower):
+        if len(texto) >= 60:
+            return True, None
+
+    return False, f"Enunciado truncado ou não autossuficiente ({motivo_detectado} sem trecho/oração suporte no corpo da questão)."
+
+
+def validar_item_para_revisao(item_id: int) -> tuple[bool, str]:
+    """
+    Valida se um item de estudo pode ser agendado/enviado para o ciclo de revisão ativa (Ebbinghaus).
+    Regras estritas:
+      - Deve existir no banco
+      - categoria DEVE ser 'questao'
+      - conteudo não pode estar vazio (enunciado substancial)
+      - enunciado DEVE ser autossuficiente (sem dependência cega de textos externos não fornecidos)
+      - detalhes_resposta/gabarito não pode estar vazio (gabarito substancial)
+    """
+    conn = db.get_db_connection()
+    try:
+        with conn.cursor(cursor_factory=RealDictCursor) as cur:
+            cur.execute("""
+                SELECT id, categoria, conteudo, gabarito, detalhes_resposta
+                FROM itens_estudo
+                WHERE id = %s;
+            """, (item_id,))
+            row = cur.fetchone()
+            if not row:
+                return False, f"Item {item_id} não encontrado."
+
+            if row["categoria"] != "questao":
+                return False, f"Item {item_id} é da categoria '{row['categoria']}'. Revisões ativas são exclusivas para 'questao'."
+
+            conteudo = (row.get("conteudo") or "").strip()
+            if len(conteudo) < 5:
+                return False, f"Item {item_id} não possui enunciado/pergunta válido."
+
+            autossuficiente, motivo_auto = verificar_autossuficiencia_enunciado(conteudo)
+            if not autossuficiente:
+                logger.warning(f"[revisoes] Item {item_id} rejeitado na validação: {motivo_auto}")
+                return False, f"Item {item_id}: {motivo_auto}"
+
+            resposta = (row.get("gabarito") or row.get("detalhes_resposta") or "").strip()
+            if len(resposta) < 2:
+                return False, f"Item {item_id} não possui gabarito/resposta válido."
+
+            return True, "Item válido para revisão."
+    finally:
+        conn.close()
+
+
 def agendar_primeira_revisao(
     item_id: int,
     base_date: Optional[datetime] = None,
-    substituir_concluidas: bool = False
+    substituir_concluidas: bool = False,
+    validar: bool = True
 ) -> Optional[int]:
     """
     Cria a primeira revisão (etapa 0) de um item, se ele ainda não tiver ciclo aberto.
-    Retorna o ID da revisão criada ou None se já existia.
+    Valida se o item é elegível (categoria 'questao' com pergunta e gabarito).
+    Retorna o ID da revisão criada ou None se já existia ou foi rejeitado.
     """
+    if validar:
+        valido, motivo = validar_item_para_revisao(item_id)
+        if not valido:
+            logger.warning(f"[revisoes] Agendamento recusado: {motivo}")
+            return None
+
     ladder = intervalos()
     conn = db.get_db_connection()
     try:
@@ -112,13 +226,13 @@ def agendar_primeira_revisao(
 
 
 def backfill_revisoes(
-    categorias: Optional[Sequence[str]] = None,
+    categorias: Optional[Sequence[str]] = ("questao",),
     base_date: Optional[datetime] = None
 ) -> Dict[str, int]:
     """
     Cria a primeira revisão para todo item de estudo que ainda não possui nenhuma revisão.
-    Usa como base a data da última revisão do item (ou a data de criação), para que a escada
-    comece do momento em que o conteúdo foi estudado.
+    Por padrão, agenda APENAS questões ('questao'), mantendo teorias sob consulta sob demanda.
+    Usa como base a data da última revisão do item (ou a data de criação).
     """
     conn = db.get_db_connection()
     try:
@@ -173,11 +287,12 @@ def _serializar_revisao(row: Dict[str, Any]) -> Dict[str, Any]:
 def listar_pendentes(
     dias: int = 0,
     materia_id: Optional[int] = None,
-    categoria: Optional[str] = None,
+    categoria: Optional[str] = "questao",
     limite: int = 50
 ) -> List[Dict[str, Any]]:
     """
     Lista revisões em aberto com vencimento até hoje + `dias`.
+    Por padrão, restringe a categoria='questao' (revisão ativa apenas por questão).
     dias=0 -> só o que vence hoje ou já está atrasado.
     """
     limite_data = agora_local() + timedelta(days=max(0, dias))
@@ -196,7 +311,7 @@ def listar_pendentes(
         SELECT
             r.id AS revisao_id, r.item_id, r.etapa, r.intervalo_dias, r.data_agendada,
             r.data_realizada, r.status, r.desempenho, r.observacao,
-            i.topico, i.categoria, i.conteudo, i.detalhes_resposta,
+            i.topico, i.categoria, i.conteudo, i.gabarito, i.detalhes_resposta,
             i.parent_id, i.materia_id, m.nome AS materia_nome
         FROM revisoes r
         JOIN itens_estudo i ON i.id = r.item_id
@@ -231,7 +346,7 @@ def plano_revisoes(dias: int = 30, materia_id: Optional[int] = None) -> Dict[str
     query = f"""
         SELECT
             r.id AS revisao_id, r.item_id, r.etapa, r.intervalo_dias, r.data_agendada,
-            r.status, i.topico, i.categoria, i.detalhes_resposta, i.parent_id,
+            r.status, i.topico, i.categoria, i.gabarito, i.detalhes_resposta, i.parent_id,
             i.materia_id, m.nome AS materia_nome
         FROM revisoes r
         JOIN itens_estudo i ON i.id = r.item_id
@@ -282,8 +397,8 @@ def plano_revisoes(dias: int = 30, materia_id: Optional[int] = None) -> Dict[str
     }
 
 
-def estatisticas() -> Dict[str, Any]:
-    """Resumo do estado do ciclo de revisões para o dashboard e para o agente."""
+def estatisticas(categoria: Optional[str] = "questao") -> Dict[str, Any]:
+    """Resumo do estado do ciclo de revisões para o dashboard e para o agente (padrão: questao)."""
     conn = db.get_db_connection()
     hoje = agora_local()
     try:
@@ -291,18 +406,26 @@ def estatisticas() -> Dict[str, Any]:
             cur.execute("SELECT status, COUNT(*) AS qtd FROM revisoes GROUP BY status;")
             por_status = {r["status"]: r["qtd"] for r in cur.fetchall()}
 
-            cur.execute("""
+            cat_filter = "AND i.categoria = %s" if categoria else ""
+            cat_param = [categoria] if categoria else []
+
+            query_devidas = f"""
                 SELECT 
-                    COUNT(*) FILTER (WHERE status = ANY(%s) AND data_agendada::date <= %s) AS devidas,
-                    COUNT(*) FILTER (WHERE status = ANY(%s) AND data_agendada::date < %s) AS atrasadas,
-                    COUNT(*) FILTER (WHERE status = ANY(%s) AND data_agendada::date > %s AND data_agendada::date <= %s) AS proximos_7,
-                    COUNT(DISTINCT item_id) AS itens_cobertos
-                FROM revisoes;
-            """, (
+                    COUNT(*) FILTER (WHERE r.status = ANY(%s) AND r.data_agendada::date <= %s) AS devidas,
+                    COUNT(*) FILTER (WHERE r.status = ANY(%s) AND r.data_agendada::date < %s) AS atrasadas,
+                    COUNT(*) FILTER (WHERE r.status = ANY(%s) AND r.data_agendada::date > %s AND r.data_agendada::date <= %s) AS proximos_7,
+                    COUNT(DISTINCT r.item_id) AS itens_cobertos
+                FROM revisoes r
+                JOIN itens_estudo i ON i.id = r.item_id
+                WHERE 1=1 {cat_filter};
+            """
+            params_devidas = [
                 list(STATUS_ABERTOS), hoje.date(),
                 list(STATUS_ABERTOS), hoje.date(),
                 list(STATUS_ABERTOS), hoje.date(), (hoje + timedelta(days=7)).date()
-            ))
+            ] + cat_param
+
+            cur.execute(query_devidas, tuple(params_devidas))
             res = cur.fetchone()
             devidas = res["devidas"] or 0
             atrasadas = res["atrasadas"] or 0
@@ -320,12 +443,16 @@ def estatisticas() -> Dict[str, Any]:
             )
             por_categoria = {r["categoria"]: r["qtd"] for r in cur.fetchall()}
 
-            cur.execute("SELECT COUNT(*) AS qtd FROM itens_estudo;")
+            if categoria:
+                cur.execute("SELECT COUNT(*) AS qtd FROM itens_estudo WHERE categoria = %s;", (categoria,))
+            else:
+                cur.execute("SELECT COUNT(*) AS qtd FROM itens_estudo;")
             total_itens = cur.fetchone()["qtd"]
 
         return {
             "agora_local": hoje.isoformat(),
             "escada_dias": intervalos(),
+            "categoria_filtro": categoria,
             "por_status": por_status,
             "devidas_hoje": devidas,
             "atrasadas": atrasadas,

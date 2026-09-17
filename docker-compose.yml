@@ -42,7 +42,7 @@ services:
       DEFAULT_LLM_MODEL: glm-5.3-flash
       MODEL_FAST: glm-5.3-flash
       MODEL_MID: glm-5.3-flash
-      MODEL_STRONG: strong
+      MODEL_STRONG: ${MODEL_STRONG:-strong}
       LANGFUSE_PUBLIC_KEY: pk-lf-944c3458-c3e3-40fb-b7c0-e15844a2c848
       LANGFUSE_SECRET_KEY: sk-lf-2d440ba0-ab8f-464f-b739-3994753b057b
       LANGFUSE_HOST: https://cloud.langfuse.com
@@ -79,6 +79,49 @@ services:
     networks:
       - homelab_default
 
+  study-rag-studio:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: study-rag-studio
+    restart: unless-stopped
+    ports:
+      - "2024:2024"
+    volumes:
+      - ./src:/app/src
+      - ./tests:/app/tests
+      - ./scripts:/app/scripts
+      - ./langgraph.json:/app/langgraph.json:ro
+      - ./.env:/app/.env:ro
+    env_file:
+      - .env
+    environment:
+      POSTGRES_HOST: study-rag-db
+      POSTGRES_PORT: 5432
+      POSTGRES_DB: study_rag
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+      LITELLM_BASE_URL: http://litellm:4000/v1
+      LITELLM_API_KEY: ${LITELLM_API_KEY:-sk-master-dummy-key}
+      DEFAULT_LLM_MODEL: glm-5.3-flash
+      MODEL_FAST: glm-5.3-flash
+      MODEL_MID: glm-5.3-flash
+      MODEL_STRONG: ${MODEL_STRONG:-strong}
+      LANGCHAIN_TRACING_V2: ${LANGCHAIN_TRACING_V2:-true}
+      LANGCHAIN_API_KEY: ${LANGCHAIN_API_KEY:-}
+      LANGCHAIN_PROJECT: ${LANGCHAIN_PROJECT:-study-rag-agent}
+      LANGCHAIN_ENDPOINT: ${LANGCHAIN_ENDPOINT:-https://api.smith.langchain.com}
+      EMBEDDING_PROVIDER: fastembed
+      EMBEDDING_MODEL: BAAI/bge-small-en-v1.5
+      EMBEDDING_DIM: 384
+      MIN_SIMILARITY_THRESHOLD: 0.50
+    command: langgraph dev --host 0.0.0.0 --port 2024 --config /app/langgraph.json --allow-blocking --no-browser
+    depends_on:
+      study-rag-db:
+        condition: service_healthy
+    networks:
+      - homelab_default
+
   study-rag-bot:
     build:
       context: .
@@ -95,6 +138,28 @@ services:
     command: python /app/src/bot/main.py
     depends_on:
       - study-rag-api
+    networks:
+      - homelab_default
+
+  study-rag-ops-bot:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: study-rag-ops-bot
+    restart: unless-stopped
+    volumes:
+      - ./src:/app/src
+      - ./scripts:/app/scripts
+      - ./:/app  # Para dar acesso ao shell na raiz do projeto
+      - /var/run/docker.sock:/var/run/docker.sock # Opcional: acesso ao docker (mas requer cuidados de segurança). Por agora vou omitir, focando em comandos normais
+    env_file:
+      - .env
+    environment:
+      API_BASE_URL: http://study-rag-api:8000/api/v1
+    command: python /app/src/bot/ops_bot.py
+    depends_on:
+      - study-rag-api
+      - study-rag-db
     networks:
       - homelab_default
 

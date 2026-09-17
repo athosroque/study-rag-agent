@@ -41,7 +41,7 @@ flowchart TD
    - ⚠️ **Pegadinhas de Prova:** Exceções contra-intuitivas e armadilhas recorrentes de bancas examinadoras (ex: *ausência de autoexecutoriedade na cobrança de multas*).
    - ❓ **Questões de Fixação:** Enunciados comentados com gabarito explicativo para autoavaliação.
 3. **Embeddings Individuais:** Cada subitem possui seu próprio vetor matemático de 384 dimensões (`bge-small-en-v1.5`), permitindo que a busca semântica recupere tanto o tópico amplo quanto a pegadinha cirúrgica.
-4. **Dupla Persistência (Relacional + JSONB):** O registro mestre mantém os subitens como linhas com `parent_id` (para integridade referencial e buscas granulares) e simultaneamente em seu array JSONB `fragmentos` (para leitura consolidada ultra-rápida no Dashboard).
+4. **Dupla Persistência (Relacional + JSONB):** O registro mestre mantém os subitens como linhas com `parent_id` (para integridade referencial e buscas granulares) e simultaneamente em seu array JSONB `fragmentos` (para leitura consolidada e consultas eficientes via API e Telegram Bot).
 
 ---
 
@@ -67,6 +67,7 @@ study-rag-agent/
 │   └── maintenance/            # Scripts para intervenções no Banco de Dados
 │       ├── backfill_revisoes.py
 │       ├── clean_db.py
+│       ├── migrate_gabarito_column.py
 │       └── sanitize_hierarchy.py
 ├── tests/                      # 🧪 Testes Automatizados (pytest)
 ├── dossies/                    # 📄 Ingestão de materiais em lote
@@ -84,10 +85,12 @@ study-rag-agent/
 | `id` | `SERIAL PRIMARY KEY` | Identificador único do item |
 | `topico` | `TEXT` | Assunto ou título do item |
 | `categoria` | `TEXT` | `teoria`, `sacada`, `pegadinha` ou `questao` |
-| `conteudo` | `TEXT` | Conceito, macete, armadilha ou enunciado da questão |
-| `detalhes_resposta` | `TEXT` | Resposta, comentário pedagógico ou gabarito |
+| `conteudo` | `TEXT` | Estritamente o enunciado/assertiva (sem gabarito) ou conceito/macete |
+| `gabarito` | `TEXT` | Resposta objetiva ou gabarito oficial direto (ex: 'CERTO', 'ERRADO', alternativa ou resposta concisa) |
+| `detalhes_resposta` | `TEXT` | Resolução comentada, fundamentação técnica ou notas pedagógicas |
 | `fragmentos` | `JSONB` | Array consolidado de fragmentos e subitens vinculados |
 | `parent_id` | `INTEGER REFERENCES itens_estudo(id)` | Chave estrangeira autoreferencial para o Tópico Mestre |
+| `materia_id` | `INTEGER REFERENCES materias(id)` | Chave estrangeira para a disciplina na tabela `materias` |
 | `embedding` | `vector(384)` | Vetor denso indexado via **HNSW** (`vector_cosine_ops`) |
 | `qtd_revisoes` | `INTEGER` | Quantidade de enriquecimentos e revisões do tópico |
 | `link_do_video` | `TEXT` | URL da aula ou fonte de origem |
@@ -116,7 +119,7 @@ study-rag-agent/
 
 ---
 
-## 🔄 Grafo LangGraph de 6 Estágios
+## 🔄 Grafo LangGraph de 8 Estágios
 
 O pipeline é orquestrado de forma assíncrona com streaming Server-Sent Events (SSE):
 
@@ -124,25 +127,25 @@ O pipeline é orquestrado de forma assíncrona com streaming Server-Sent Events 
 | :--- | :--- | :--- |
 | 1 | `video_search` | Obtém transcrição de URL do YouTube via `youtube-transcript-api` ou sintetiza aula profunda via LLM (`glm-5.3-flash`) se nenhum texto for fornecido. |
 | 2 | `validate_video` | Consulta `videos_processados` para prevenir reprocessamento acidental de links idênticos. |
-| 3 | `extraction_agent` | LLM (`glm-5.3-flash`) extrai itens estruturados via Pydantic (`ConjuntoItemsExtraidos`). |
-| 4 | `retrieve_similar_items` | Consulta pgvector para ancoragem no Tópico Mestre (`search_master_topic`) e carrega todo o acervo histórico anterior. |
+| 3 | `extraction_agent` | LLM (`glm-5.3-flash`) extrai itens estruturados com separação estrita: `conteudo` (apenas enunciado/pergunta), `gabarito` (resposta objetiva) e `detalhes_resposta` (resolução comentada). |
+| 4 | `retrieve_similar_items` | Consulta pgvector para ancoragem no Tópico Mestre (`search_master_topic`) e carrega todo o acervo histórico anterior particionado por matéria. |
 | 5 | `reconciliation_agent` | LLM (`glm-5.3-flash`) atua como Curador-Chefe comparando candidato a candidato: descarta redundâncias e vincula novidades ao mestre. |
-| 6 | `db_writer` | Persiste vídeos, insere novos tópicos mestres, anexa linhas filhas com `parent_id` e atualiza JSONB. |
-| 7 | `cespe_agent` | Formula questões assertivas inéditas no padrão CESPE/Cebraspe (Certo/Errado) focando em pegadinhas (`glm-5.3-flash`). |
-| 8 | `revisao_scheduler` | Agenda o ciclo de revisões ativas no motor de repetição espaçada (Curva de Ebbinghaus). |
+| 6 | `db_writer` | Persiste vídeos, insere novos tópicos mestres, anexa linhas filhas com `parent_id`, propaga `gabarito` e atualiza JSONB. |
+| 7 | `cespe_agent` | Itera sobre todos os tópicos extraídos da aula e formula dinamicamente questões inéditas (nível médio/alto) no padrão CESPE/Cebraspe focando em pegadinhas (`glm-5.3-flash`). |
+| 8 | `revisao_scheduler` | Agenda o ciclo de revisões ativas exclusivamente para questões (`categoria='questao'`) no motor de repetição espaçada (Curva de Ebbinghaus). |
 
 ---
 
 ## 🧠 Motor de Revisão Espaçada (Curva de Ebbinghaus)
 
-O projeto integra um motor nativo de repetição espaçada projetado para combater a Curva do Esquecimento. Cada tópico, questão ou pegadinha extraída pelo LangGraph pode entrar automaticamente num ciclo de revisões programadas.
+O projeto integra um motor nativo de repetição espaçada projetado para combater a Curva do Esquecimento. A revisão ativa é focada estritamente em **questões com gabarito**, enquanto os tópicos conceituais (teorias, sacadas e pegadinhas) ficam permanentemente acessíveis sob demanda.
 
 ### A Lógica da Escada
-- **Intervalos Padrão:** `[1, 7, 30]` dias.
+- **Intervalos Padrão:** `[1, 7, 15, 30]` dias (configurável via `REVISAO_INTERVALOS_DIAS` no `.env`).
 - **Autoavaliação e Avanço:**
-  - **Errei (0):** Volta para a etapa inicial (0) e reprograma para amanhã (1 dia).
-  - **Difícil (1):** Repete a etapa atual.
-  - **Acertei (2) / Fácil (3):** Avança para o próximo degrau da escada.
+  - **Errei (0):** Volta para a etapa inicial (0) e reprograma para amanhã (+1 dia).
+  - **Difícil (1):** Repete a etapa atual (o intervalo não avança).
+  - **Acertei (2) / Fácil (3):** Avança para o próximo degrau da escada (+7d ➔ +15d ➔ +30d).
 - **Adiantamento Seguro:** Se uma revisão não for feita no dia agendado, o sistema a marca como `adiada` e a empurra para o dia seguinte, sem punir a etapa do usuário no ciclo de retenção.
 - Concluída a etapa de 30 dias com sucesso, o ciclo do item é encerrado (assumido como consolidado na memória longa).
 
@@ -153,29 +156,44 @@ O projeto integra um motor nativo de repetição espaçada projetado para combat
 Para evitar que o motor de Ebbinghaus dependa da lembrança do usuário de abrir o sistema, construímos um **Telegram Bot Interativo (`study-rag-bot`)** com autonomia temporal.
 
 ### Autonomia e Cron Jobs
-Rodando em seu próprio container Docker (`telegram_bot.py`), o bot utiliza o `JobQueue` para efetuar cobranças ativas integradas à API:
-1. **Resumo Matinal (08:00 GMT-3):** O bot consome a rota `/api/v1/revisoes/stats` e envia o seu cronograma do dia, listando itens atrasados e devidos, agrupados num painel simplificado.
-2. **Cobrança Noturna (20:00 GMT-3):** Caso existam revisões pendentes no fim do dia, o bot envia alertas ostensivos com um botão "call-to-action" para zerar as pendências.
+Rodando em seu próprio container Docker (`main.py`), o bot utiliza o `JobQueue` para efetuar cobranças ativas integradas à API:
+1. **Resumo Matinal (08:00 GMT-3):** O bot consome a rota `/api/v1/revisoes/stats?categoria=questao` e envia o cronograma diário de questões, listando itens atrasados e devidos.
+2. **Cobrança Noturna (20:00 GMT-3):** Caso existam questões pendentes no fim do dia, o bot envia alertas ostensivos com botão "call-to-action" para zerar as pendências.
 
-### Comandos de Interação
-- `/revisar` (ou `/start`): Filtra a fila de revisão e envia exclusivamente **Questões** atrasadas.
-- `/revisar_teoria`: Filtra e traz revisões focadas apenas na categoria de Teoria e Conceitos.
-- `/revisar_todas`: Traz um mix abrangente de qualquer conteúdo pendente (Macetes, Pegadinhas, Questões).
-- **Botões Inline:** Todas as revisões ocorrem de forma fluida sem sair do chat. O usuário recebe a pergunta, clica em "Mostrar Resposta" (Gabarito), preenche a autoavaliação nos 4 botões de desempenho, e o ciclo avança para o próximo card automaticamente.
+### Comandos e Interatividade Completa
+- `/revisar` (ou `/start`): Inicia a fila de **Questões** pendentes/atrasadas com simulador ativo interativo.
+- `/teoria [assunto]`: Consulta o resumo teórico sob demanda para qualquer matéria/assunto (ex: `/teoria Crase`, `/teoria Atos Administrativos`).
+- **Mensagens Livres:** Envio de mensagens de texto espontâneas (ex: "teoria de crase") ativa a busca conceitual e entrega os fundamentos sem poluir a fila de revisões.
+- **Botões Inline Interativos (Simulador Ativo):**
+  - **Estilo CESPE / Cebraspe (Certo / Errado):** Renderiza botões `[ 🟢 Certo ]` e `[ 🔴 Errado ]`.
+  - **Múltipla Escolha (A..E):** Renderiza botões `[ A ] [ B ] [ C ] [ D ] [ E ]`.
+  - **Correção Automática Instantânea:** Ao tocar na alternativa, o bot avalia a resposta contra o gabarito oficial:
+    - **Acertou:** Grava `desempenho = 2`, avança a etapa da curva (+7d, +15d, +30d), exibe `🎉 Você ACERTOU!` e apresenta a fundamentação comentada.
+    - **Errou:** Grava `desempenho = 0`, reinicia o ciclo, reprograma a questão para o dia seguinte (+1d) e exibe `❌ Você ERROU!` com o gabarito comentado e pegadinhas explicadas.
+  - **Controle Pós-Resposta:**
+    - `[ ➡️ Próxima Questão ]`: Carrega instantaneamente a próxima pendência.
+    - `[ ⚠️ Acertei no Chute (Difícil) ]`: Permite rebaixar para dificuldade 1 caso tenha acertado com dúvida, evitando avanço precoce.
+  - `[📖 Ver Teoria]`, `[💡 Ver Sacada]`, `[⚠️ Ver Pegadinha]`: Abrem cards conceituais complementares vinculados diretamente à questão.
+  - `[ 👁️ Ver Gabarito Direto ]`: Fallback para visualização direta e questões abertas/conceituais.
 
 ---
 
-## 🖥️ Interface Web (Dashboard)
+## 📡 Interfaces de Acesso e Consumo
 
-A interface em Vanilla CSS e JS moderno (`http://localhost:8090`) disponibiliza 4 abas especializadas:
+A interação com a base de conhecimento e revisões ocorre através de:
 
-1. **⚡ Curadoria ao Vivo (SSE):** Formulário de ingestão e terminal interativo com linha do tempo visual nó a nó do LangGraph.
-2. **📖 Base de Conhecimento Reconciliada:**
-   - Cards dos Tópicos Mestres com badges de contadores (`❓ X Questões`, `⚠️ Y Pegadinhas`, `💡 Z Macetes`, `📖 W Conceitos`).
-   - Acordeão retrátil categorizado por grupos didáticos (Macetes em âmbar, Pegadinhas em rosa/vermelho de alerta, Questões com gabarito explicativo revelável).
-   - Filtros dinâmicos por categoria e busca textual instantânea com debounce.
-3. **🔍 Busca Semântica pgvector:** Pesquisa por proximidade de cosseno matemática calculando percentual de relevância.
-4. **🎥 Aulas & Transcrições:** Acervo de todas as aulas ingeridas com modal completo para leitura e cópia do texto integral.
+1. **🤖 Bot Autônomo do Telegram:** 
+   - Envio diário de questões com base na Curva do Esquecimento (Ebbinghaus em `1, 7, 15, 30` dias).
+   - Resolução interativa via botões (C/E e Múltipla Escolha) com correção automática instantânea.
+   - Apoio conceitual sob demanda (`[📖 Ver Teoria]`, `[💡 Ver Sacada]`, `[⚠️ Ver Pegadinha]`).
+   - Reagendamento automático de acertos/erros no banco de dados.
+
+2. **⚡ API REST FastAPI (`http://localhost:8090`):**
+   - Documentação interativa Swagger acessível em `http://localhost:8090/docs`.
+   - Ingestão e curadoria via streaming SSE (`/api/v1/process/stream`).
+   - Busca semântica vetorial pgvector (`/api/v1/search`).
+   - Apoio conceitual para questões (`/api/v1/items/{id}/relacionados`).
+   - Gerenciamento de ciclo de repetição espaçada e dados de estudo.
 
 ---
 
@@ -187,13 +205,13 @@ A interface em Vanilla CSS e JS moderno (`http://localhost:8090`) disponibiliza 
 
 ### Inicialização
 ```bash
-# Subir os contêineres do banco (pgvector) e API FastAPI
+# Subir os contêineres do banco (pgvector), API FastAPI e Telegram Bot
 docker compose up -d
 
 # Verificar logs da API
 docker compose logs -f study-rag-api
 
-# Executar a suíte de testes automatizados (27 testes)
+# Executar a suíte completa de testes automatizados (64 testes)
 docker exec study-rag-api pytest -v
 ```
 
@@ -202,6 +220,8 @@ docker exec study-rag-api pytest -v
 - `GET /api/v1/stats` — Contadores consolidados de tópicos mestres, fragmentos e vídeos.
 - `GET /api/v1/items` — Listagem de tópicos (parâmetro `only_parents=true` por padrão).
 - `GET /api/v1/items/{id}` — Detalhes completos do item, incluindo filhos relacionais e fragmentos.
+- `GET /api/v1/items/{id}/relacionados` — Retorna os itens conceituais vinculados (`teoria`, `sacada`, `pegadinha`) para suporte à resolução de questões.
+- `GET /api/v1/materias` — Listagem de disciplinas normalizadas com contadores de tópicos e itens.
 - `POST /api/v1/search` — Busca vetorial semântica direta no PostgreSQL.
 - `POST /api/v1/process` — Processamento síncrono de aula pelo LangGraph.
 - `GET /api/v1/process/stream` — Streaming SSE da curadoria nó a nó em tempo real.
@@ -209,8 +229,8 @@ docker exec study-rag-api pytest -v
 - `GET /api/v1/videos/detail` — Transcrição completa de uma aula.
 
 ### Endpoints de Revisões
-- `GET /api/v1/revisoes/stats` — Contadores e painel geral de devidas, atrasadas e próximas. Usado pelo Bot do Telegram.
-- `GET /api/v1/revisoes/pendentes` — Fila filtrável de revisões em aberto.
+- `GET /api/v1/revisoes/stats` — Contadores e painel geral de devidas, atrasadas e próximas (filtro opcional `categoria`, padrão `questao`).
+- `GET /api/v1/revisoes/pendentes` — Fila filtrável de revisões em aberto (filtro opcional `categoria`, padrão `questao`).
 - `GET /api/v1/revisoes/plano` — Distribuição diária do horizonte futuro.
 - `POST /api/v1/revisoes/responder` — Transação central que registra a nota de desempenho, resolve a pendência e insere o próximo agendamento no banco.
 
@@ -353,6 +373,26 @@ Para alterar a chave dos nós do LangGraph ou de outros agentes:
    - `DEFAULT_LLM_MODEL`: `glm-5.3-flash` (unificado para todos os agentes: extração, reconciliação e questões Cespe)
    - Aliases adicionais suportados: `z-ai/glm-5.3-flash`, `deepseek-v4.1-flash`, `strong` (`z-ai/glm-5.2`)
    *Para adicionar novos modelos ao gateway, edite o `config.yaml` do `llm-gateway` e reinicie o container: `docker restart litellm`.*
+
+### 3.1. Compressão Automática de Prompts (Headroom)
+
+O projeto suporta a interceptação e compressão automática de prompts massivos (como transcrições completas) de forma totalmente transparente através do proxy **Headroom**. 
+
+Para ativar a compressão em todas as requisições do RAG:
+1. A virtual key criada no gateway LiteLLM deve possuir estritamente o alias `vk-headroom`.
+2. Configure a chave gerada no `.env` do projeto central:
+   ```bash
+   LITELLM_API_KEY=sk-CHAVE_GERADA_COM_ALIAS_VK_HEADROOM
+   ```
+O interceptador (configurado no Gateway) vai capturar as chamadas e reduzir drasticamente o tamanho dos textos antes de enviar ao modelo (resultando em inferências até 4x mais rápidas na extração de tópicos da transcrição).
+
+### 3.2. Otimização de Tokens de Saída (Reconciliador)
+
+O **Agente Reconciliador** analisa subitens extraídos para decidir se devem ser descartados (redundância) ou salvos no Tópico Mestre.
+Para evitar que o LLM gaste milhares de tokens reescrevendo o texto de cada item apenas para informar sua decisão, o fluxo do LangGraph foi otimizado estruturalmente:
+- O agente envia ao LLM os candidatos numerados com um `indice_candidato`.
+- O LLM responde com um JSON extremamente enxuto contendo apenas o `indice_candidato`, a ação escolhida e a justificativa.
+- O código em Python remonta os dados mapeando os índices de volta para os objetos originais armazenados em memória. Essa técnica despenca o consumo de Output Tokens do modelo em cerca de 80% e extingue totalmente a chance de o JSON quebrar por estourar o limite de 4096 tokens da API.
 
 ---
 
