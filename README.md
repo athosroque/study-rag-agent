@@ -6,7 +6,7 @@ O **Study RAG Agent** é um sistema inteligente concebido para transformar aulas
 
 ---
 
-## 🎯 Showcase Técnico: Competências em Dados, IA e MLOps
+## 🎯 Showcase Técnico: Dados, IA e MLOps
 
 ### 🤖 Inteligência Artificial & Engenharia de Agentes
 - **Orquestração de Agentes (Stateful Agents):** Uso do **LangGraph** para criar um pipeline cíclico de 8 estágios autônomos, gerenciando grafos de estado, memória e tomada de decisão complexa entre os nós.
