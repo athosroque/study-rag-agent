@@ -8,8 +8,6 @@ O **Study RAG Agent** é um sistema inteligente concebido para transformar aulas
 
 ## 🎯 Showcase Técnico: Competências em Dados, IA e MLOps
 
-Este projeto foi concebido não apenas como uma ferramenta funcional, mas como um **portfólio prático** que comprova o domínio de requisitos avançados e modernos exigidos em vagas de **Data Science, AI Engineering e Machine Learning Engineering**.
-
 ### 🤖 Inteligência Artificial & Engenharia de Agentes
 - **Orquestração de Agentes (Stateful Agents):** Uso do **LangGraph** para criar um pipeline cíclico de 8 estágios autônomos, gerenciando grafos de estado, memória e tomada de decisão complexa entre os nós.
 - **Engenharia de Prompt Avançada & Structured Outputs:** Utilização de `with_structured_output` aliado a esquemas estritos do **Pydantic** para extração precisa de dados não-estruturados, garantindo saídas previsíveis, determinísticas e prevenindo alucinações.
