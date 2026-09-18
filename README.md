@@ -6,6 +6,33 @@ O **Study RAG Agent** é um sistema inteligente concebido para transformar aulas
 
 ---
 
+## 🎯 Showcase Técnico: Competências em Dados, IA e MLOps
+
+Este projeto foi concebido não apenas como uma ferramenta funcional, mas como um **portfólio prático** que comprova o domínio de requisitos avançados e modernos exigidos em vagas de **Data Science, AI Engineering e Machine Learning Engineering**.
+
+### 🤖 Inteligência Artificial & Engenharia de Agentes
+- **Orquestração de Agentes (Stateful Agents):** Uso do **LangGraph** para criar um pipeline cíclico de 8 estágios autônomos, gerenciando grafos de estado, memória e tomada de decisão complexa entre os nós.
+- **Engenharia de Prompt Avançada & Structured Outputs:** Utilização de `with_structured_output` aliado a esquemas estritos do **Pydantic** para extração precisa de dados não-estruturados, garantindo saídas previsíveis, determinísticas e prevenindo alucinações.
+- **Sistemas RAG Avançados e Curadoria Ativa:** Em vez de realizar Retrieval-Augmented Generation ingênuo (injetando fragmentos cegamente no prompt), o sistema age como um curador autônomo, construindo e reconciliando uma ontologia hierarquizada e estritamente não-redundante.
+- **Tratamento de Edge Cases de LLMs:** Prevenção ativa de anomalias conhecidas da área, como *Runaway Generation* (loops infinitos de inferência até esgotar limites de API), lidando estruturalmente com as restrições e conflitos nativos de *Function Calling*.
+
+### 📊 Engenharia de Dados & Bancos de Dados Vetoriais
+- **Armazenamento Híbrido Avançado:** Modelagem complexa e poliglota dentro de um único SGBD, fundindo características de banco relacional (integridade referencial com chaves como `parent_id`), documento (arrays e objetos `JSONB` para consultas rápidas de consolidação) e vetorial (`vector(384)` para o RAG).
+- **Busca Semântica Otimizada com `pgvector`:** Implementação de buscas semânticas escaláveis no PostgreSQL com índices de alta performance **HNSW** (`vector_cosine_ops`), dispensando dependências de APIs pagas utilizando modelos de *embedding* abertos rodando localmente (ex: `BAAI/bge-small-en-v1.5` carregado via **FastEmbed**).
+- **Pipelines ETL Robustos:** Ingestão agnóstica de aulas e áudios, seguida por sanitização profunda de texto via Expressões Regulares (Regex), removendo metadados espúrios de transcrições e aplicando algoritmos de *Chunking Semântico com Overlap* (preservando o fechamento de frases e parágrafos estruturais para evitar perda de semântica vetorial).
+
+### ⚙️ MLOps, FinOps & Observabilidade
+- **LLM Gateway & Práticas FinOps:** Operação em malha com o **LiteLLM Gateway** para padronização unificada das APIs de inferência. Implementação de fallback dinâmico entre modelos, rastreamento analítico em tempo real do consumo de tokens e segregação rigorosa de orçamento através de *Virtual Keys* geradas por agente (permitindo interrupção instantânea em picos de gasto indesejado).
+- **Otimização Extrema de Latência e Custos:** Design engenhoso nas etapas de curadoria/reconciliação delegando o texto pesado à memória da aplicação Python e transitando com o LLM apenas os IDs de referência indexados num array JSON (economia comprovada de até 80% do consumo em *Output Tokens* do modelo).
+- **Dual-Tracing de Interações AI:** Visibilidade granular end-to-end das correntes de raciocínio lógico (CoT) instrumentadas simultaneamente via **LangSmith** e **Langfuse**, mensurando latência por nó, avaliação de custos da API e monitoramento analítico de *LLM Traces*.
+
+### 🚀 Engenharia de Software Aplicada
+- **Arquitetura Orientada a Serviços (SOA) e Assíncrona:** Backend desenvolvido com **FastAPI** provendo *Streaming Server-Sent Events* (SSE) que repassa fluxos de pensamento dos agentes em tempo real à UI. Modelagem assíncrona robusta rodando isoladamente os *Workers* de Curadoria e Bots de Automação (Telegram).
+- **Algoritmos Aplicados a Produtos de Dados:** Criação nativa de um motor analítico (SQL/Python) de repetição espaçada modelado a partir da matemática da *Curva do Esquecimento de Ebbinghaus*, funcionando como um robusto sistema reativo de recomendações pedagógicas ativas.
+- **Confiabilidade, Integração Contínua e DevOps:** Garantia de qualidade por meio de uma robusta suíte de mais de 60 testes automatizados baseados em **pytest** cobrindo inteiramente os fluxos críticos lógicos e orquestração determinística, empacotada em arquitetura conteinerizada padronizada com **Docker** e **Docker Compose**.
+
+---
+
 ## 🏛️ Arquitetura e Paradigma de Conhecimento
 
 O sistema resolve o problema clássico de inchaço de dados em RAGs educacionais (*data bloat* e fragmentação desordenada) através de um modelo híbrido **Relacional + Vetorial + JSONB**:
