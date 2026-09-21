@@ -331,8 +331,7 @@ def extraction_agent_node(state: StudyState) -> Dict[str, Any]:
             "  * 'questao': Questão de fixação. ATENÇÃO ESTRITA:\n"
             "    - Coloque no campo 'conteudo' EXCLUSIVAMENTE o enunciado/pergunta da assertiva (NUNCA coloque a resposta dentro de 'conteudo'). O gabarito oficial ou resposta direta (ex: 'CERTO', 'ERRADO', 'Alternativa B', ou resposta objetiva concisa) DEVE ser colocado no campo 'gabarito'. Justificativas, resoluções comentadas e notas pedagógicas complementares DEVEM ir no campo 'detalhes_resposta'.\n"
             "    - REGRA CRÍTICA DE AUTOSSUFICIÊNCIA: O enunciado DEVE ser 100% autossuficiente e respondível de forma autônoma sem texto de apoio externo. NUNCA extraia perguntas que façam referências cegas a 'do texto', 'no texto', 'o autor', 'na linha X' a menos que a frase ou excerto completo analisado esteja integralmente transcrito dentro do próprio enunciado. Em matérias como Língua Portuguesa (colocação pronominal, crase, concordância, regência, pontuação), forneça OBRIGATORIAMENTE a oração ou frase completa na pergunta para que o estudante possa julgar a regra gramatical. Se o professor citou uma questão de slide cujo texto não foi lido ou não está presente, NÃO extraia como questão truncada: reformule a pergunta para que fique conceitualmente autônoma (ex: 'Considerando uma oração em que haja termo invariável atrativo antes do verbo...'), ou extraia o conhecimento como 'teoria' ou 'pegadinha'.\n\n"
-            "Seja preciso e não resuma excessivamente o conhecimento essencial.\n"
-            "MUITO IMPORTANTE: A resposta DEVE ser estritamente um JSON válido. NÃO utilize blocos de código Markdown (```json ... ```). NÃO escreva nenhum texto fora do JSON."
+            "Seja preciso e não resuma excessivamente o conhecimento essencial."
         ),
         ("user", "Matéria Informada: {materia_hint}\nTema da Aula: {tema}{bloco_info}\n\nTranscrição:\n{chunk_text}")
     ])
@@ -526,8 +525,7 @@ def reconciliation_agent_node(state: StudyState) -> Dict[str, Any]:
                 "{existing_db}\n\n"
                 "NOVOS ITENS CANDIDATOS:\n"
                 "{extracted_candidates}\n\n"
-                "Emita o relatório de reconciliação estruturado informando o 'indice_candidato' (posição numérica na lista de 0 a N) para identificar a qual candidato a decisão se refere.\n"
-                "MUITO IMPORTANTE: A resposta DEVE ser estritamente um JSON válido. NÃO utilize blocos de código Markdown (```json ... ```). NÃO escreva nenhum texto fora do JSON."
+                "Emita o relatório de reconciliação estruturado informando o 'indice_candidato' (posição numérica na lista de 0 a N) para identificar a qual candidato a decisão se refere."
             )
         ])
 
@@ -895,7 +893,7 @@ def cespe_agent_node(state: StudyState) -> Dict[str, Any]:
             "DIRETRIZES FUNDAMENTAIS DA BANCA CESPE/CEBRASPE:\n"
             "1. INEDITISMO E NÃO-DUPLICAÇÃO: Verifique atentamente a lista de 'Questões Já Existentes'. É expressamente proibido formular questões redundantes ou repetições literais das já cadastradas.\n"
             "2. NÍVEL DE DIFICULDADE (MÉDIO/ALTO): Gere APENAS questões que exijam profundidade, conhecimento de jurisprudência ou entendimento de exceções e pegadinhas. Ignore completamente conceitos básicos, literais ou introdutórios (eles não precisam virar questão).\n"
-            "3. QUANTIDADE DE QUESTÕES: Gere quantas questões forem necessárias para esgotar as pegadinhas e sacadas relevantes deste tópico. Não há limite numérico (gere 1, 3, 5 ou mais), mas mantenha o nível de exigência alto.\n"
+            "3. QUANTIDADE DE QUESTÕES: Gere de 1 a 5 questões por tópico. Deve cobrir a teoria, as sacadas e as pegadinhas relevantes. Jamais exceda o limite rígido de 5 questões por tópico.\n"
             "4. PADRÃO CESPE/CEBRASPE (Assertiva Certo/Errado):\n"
             "   - O enunciado deve ser uma declaração/assertiva categórica para o candidato julgar como CERTO ou ERRADO.\n"
             "   - Explore vocabulário clássico de prova, termos restritivos/ampliativos ('sempre', 'nunca', 'exclusivamente', 'independente de', 'salvo se'), inversões conceituais sutis e exceções.\n"
